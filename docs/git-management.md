@@ -10,7 +10,7 @@
 
 本地仓库使用项目身份 `wechat-local-mcp contributors <contributors@wechat-local-mcp.invalid>`，避免 Git 自动使用本机用户名和主机名生成作者邮箱。该邮箱为不可投递的占位地址；配置仅作用于本仓库，不修改全局 Git 身份。后续如需关联 GitHub 作者账号，应改用确认过的 GitHub 隐私邮箱，并检查新的提交元数据。
 
-尚未配置远程仓库。上游源码的独立 Git 工作副本用于固定版本和维护补丁，仍由根仓库忽略。公开发布仍须用户检查确认；安全遗留项见 [审计报告](security-audit.md)。
+公开仓库为 [catcatcc-a/wechatgpt](https://github.com/catcatcc-a/wechatgpt)，本地 `origin` 对应该仓库。首次公开已获所有者明确授权。上游源码的独立 Git 工作副本用于固定版本和维护补丁，仍由根仓库忽略；安全遗留项见 [审计报告](security-audit.md)。
 
 ## 日常使用
 

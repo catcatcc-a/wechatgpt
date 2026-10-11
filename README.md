@@ -1,10 +1,12 @@
-# wechat-local-mcp
+# wechatgpt
 
 一个运行在 macOS 本机的微信 MCP。它把微信的收发能力接到 MCP 客户端，支持后台读取实时回调消息和发送文本；原生发送路径会调用微信自己的消息创建、发送和会话更新流程，因此后台发送也会出现在电脑微信聊天记录中。
 
+公开仓库：[catcatcc-a/wechatgpt](https://github.com/catcatcc-a/wechatgpt)。Python 包和本机服务沿用 `wechat-local-mcp` 标识，MCP 客户端配置名为 `wechat-local`。
+
 > 本项目是个人研究和技术交流项目，与腾讯或微信官方无关。它只在明确适配的微信版本上工作，不能把未知版本当作兼容版本使用。
 
-**发布状态：源码预览，尚未发布到 GitHub。** 后台文本收发已实测，但重签后的普通图标启动和辅助进程修复仍待最终验收；当前不能视为即装即用的稳定版。发布前先查看 [审阅清单](docs/release-review.md)。
+**发布状态：0.1.0 源码预览。** 后台文本收发已实测，但重签后的普通图标启动和辅助进程修复仍待最终验收；当前不能视为即装即用的稳定版。使用前先查看 [审阅清单](docs/release-review.md)。
 
 文档入口：[安装](#在另一台-apple-silicon-mac-上安装) · [日常使用与自启动](docs/daily-use.md) · [实测范围](docs/live-validation.md) · [安全说明](SECURITY.md) · [贡献](CONTRIBUTING.md)。
 
@@ -72,11 +74,11 @@ Intel Mac、Windows、Linux，以及其他未列出的微信 Build 都不属于�
 
 ### 1. 安装工具并下载项目
 
-需要 Xcode Command Line Tools、支持自动工具链下载的 Go、Python 3.11+、`uv`、Git、`xz` 和可用的网络连接。运行完整离线测试还需 Node.js。构建固定使用 Go 1.26.9。先安装工具（例如 `brew install uv go xz`），再取得项目源码。下方仓库地址是占位，发布时替换为用户审核后的实际地址：
+需要 Xcode Command Line Tools、支持自动工具链下载的 Go、Python 3.11+、`uv`、Git、`xz` 和可用的网络连接。运行完整离线测试还需 Node.js。构建固定使用 Go 1.26.9。先安装工具（例如 `brew install uv go xz`），再取得项目源码：
 
 ```sh
-git clone https://github.com/<your-account>/wechat-local-mcp.git
-cd wechat-local-mcp
+git clone https://github.com/catcatcc-a/wechatgpt.git
+cd wechatgpt
 ./scripts/setup.sh
 ```
 
@@ -192,7 +194,7 @@ git diff --check
 
 离线测试覆盖 MCP stdio、配置校验、OneBot 请求/回调、请求去重、原生 helper 输入限制和 GUI 安全边界。安装 Node.js 后还会执行模拟内存中的原生接收脚本测试，验证批量边界、事件过滤和去重；测试不会连接微信。上游 Go 测试需要先执行 `scripts/bootstrap-upstream.py`，然后在 `vendor/wechat_chatter/onebot` 中运行 `go test ./...`。
 
-GitHub CI 配置只执行离线测试、发布内容检查和 GUI helper 编译，不安装微信或加载 Gadget。云端工作流尚未运行，不能用本地通过替代云端结果。完整构建和验证命令见 [构建说明](docs/build-status.md)。
+GitHub CI 只执行离线测试、发布内容检查和 GUI helper 编译，不安装微信或加载 Gadget。各次提交的云端结果见 [Source checks](https://github.com/catcatcc-a/wechatgpt/actions/workflows/ci.yml)，不能用本地通过替代云端结果。完整构建和验证命令见 [构建说明](docs/build-status.md)。
 
 贡献代码前请不要提交 `config.toml`、`mcp.json`、`data/`、`artifacts/`、`evidence/`、`backups/`、`downloads/`、`runtime/` 或 `vendor/` 下的本地副本。提交补丁或适配新微信版本时，请同时补充版本、架构、UUID、偏移来源和真实验收范围。
 

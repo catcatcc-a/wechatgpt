@@ -1,6 +1,6 @@
 # Notices
 
-`wechat-local-mcp` is an independent integration project. It is not made,
+`wechatgpt` (local package: `wechat-local-mcp`) is an independent integration project. It is not made,
 endorsed, or supported by Tencent or WeChat.
 
 The OneBot engine is adapted from
