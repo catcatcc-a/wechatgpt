@@ -39,5 +39,7 @@ for label,source in sources:
 manifest={'created_at':datetime.datetime.now().isoformat(),'method':'APFS clonefile via cp -cRp; source stable and every path/type/size/mtime/symlink compared','backup_root':str(TARGET),'entries':entries}
 (TARGET/'manifest.json').write_text(json.dumps(manifest,indent=2)+'\n')
 (TARGET/'manifest.json').chmod(0o600)
-(ROOT/'artifacts/activation/backup.json').write_text(json.dumps(manifest,indent=2)+'\n')
+report=ROOT/'artifacts/activation/backup.json'
+report.parent.mkdir(mode=0o700,parents=True,exist_ok=True)
+report.write_text(json.dumps(manifest,indent=2)+'\n')
 print(json.dumps({'complete':True,'backup_root':str(TARGET)}))

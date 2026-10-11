@@ -14,9 +14,9 @@
 - GUI 后端默认关闭。日常后台收发不激活微信窗口、不模拟鼠标键盘，也不会在后台失败时自动切换到 GUI。
 - 启动前检查微信版本、Build 和原生模块 UUID；版本不匹配时停止，不使用旧偏移强行注入。
 
-当前通过真实测试验收的是 Apple Silicon 上的微信 4.1.11.53 / Build 269109：文件传输助手的原生后台文本发送已确认能显示在电脑聊天窗口，并确认一条测试消息能在手机收到。普通联系人、群聊和媒体消息需要在各自环境中单独验收。
+当前已在 Apple Silicon 上验证微信 **4.1.15.54 / Build 270134** 的文件传输助手双向文本收发：MCP 后台发送取得服务器回执，电脑显示气泡，用户确认手机收到；手机发回的文本通过签名回调进入缓存，并能由 MCP 读取。此前 4.1.11.53 / Build 269109 也通过了文件传输助手测试。普通联系人和群聊仍需分别验收。
 
-微信 **4.1.15.54 / Build 270134** 已有独立适配候选和指令校验，尚待维护窗口完成真实收发验证，默认保持停用。进度及安装准备见 [新版适配说明](docs/wechat-4.1.15.md)；安全修复与部署状态见 [修复记录](docs/security-remediation.md)。
+4.1.15 的接收路径仅捕获新到达的文本消息，不处理媒体。版本布局、运行验证及安装准备见 [新版适配说明](docs/wechat-4.1.15.md)；安全修复与部署状态见 [修复记录](docs/security-remediation.md)。
 
 ## 工作方式
 
@@ -30,7 +30,7 @@ wechat-local-mcp
     └── native-send.py + Frida：微信原生文本发送
                           │
                           ▼
-             微信 4.1.11.53 / 269109
+             精确适配的微信 + Frida Gadget
 ```
 
 接收消息来自服务启动后收到的回调，不是微信完整历史数据库导入。发送时，MCP 先写入请求账本，再让原生 helper 通过微信的 UI 任务队列进入微信自己的发送协程；helper 观察微信生成的本地消息记录和服务器编号后返回结果。超时或结果不明时不会自动换新的 `request_id` 重发。
@@ -40,7 +40,7 @@ wechat-local-mcp
 本项目把几个公开项目和本地修复组合成一个可供 MCP 使用的 macOS 工具：
 
 1. OneBot 引擎来自 [yincongcyincong/wechat_chatter](https://github.com/yincongcyincong/wechat_chatter)，固定在提交 [`f222f37321f66d3a199cb3c7642f77f7504d85da`](https://github.com/yincongcyincong/wechat_chatter/commit/f222f37321f66d3a199cb3c7642f77f7504d85da)。本项目用补丁加入鉴权、状态探测、断线重连、请求匹配和回调归属修复；补丁在 `patches/wechat_chatter-local-auth.patch`。
-2. 原生发送适配是针对微信 4.1.11.53 / 269109 的本地逆向和调用链验证，代码在 `native/wechat_send.js`，版本 UUID 在 `native/wechat-4.1.11.53.json`。它不是对 4.1.15 的兼容承诺。
+2. 原生发送适配来自针对 4.1.11.53 / 269109 和 4.1.15.54 / 270134 的本地静态分析与真实调用链验证。发送代码在 `native/wechat_send.js`，各版本 UUID、指令指纹及布局在 `native/wechat-*.json`。4.1.15 的实时文本接收使用本项目的 `native/wechat_receive.js`，复用上游签名回调传输。
 3. Mach-O 注入工具改编自 [xiaoguiwucan/wechat-mac-hook-classic](https://github.com/xiaoguiwucan/wechat-mac-hook-classic)，固定提交为 [`3180313e08c24bf8c38e788527360d1b8d911f3d`](https://github.com/xiaoguiwucan/wechat-mac-hook-classic/commit/3180313e08c24bf8c38e788527360d1b8d911f3d)，代码和归属见 `scripts/inject_load_dylib.py`。
 4. Frida Gadget 和 Frida Python/Go 组件使用 Frida 17.8.0。微信安装包只从腾讯公开下载地址取得，项目不分发微信应用或用户数据。
 
@@ -53,14 +53,14 @@ wechat-local-mcp
 | 操作系统 | macOS 12 或更高版本（安装包声明的最低版本）；本机验收为 macOS 27.0.1 |
 | CPU | Apple Silicon / `arm64` |
 | 微信 Bundle ID | `com.tencent.xinWeChat` |
-| 微信版本 | `4.1.11.53`（显示版本通常为 `4.1.11`） |
-| 微信 Build | `269109` |
+| 微信版本 | `4.1.15.54` / `4.1.11.53`（界面可能只显示前三段） |
+| 微信 Build | 分别为 `270134` / `269109`，必须与版本成对匹配 |
 | Frida | `17.8.0` |
 | Gadget 地址 | `127.0.0.1:27042` |
 | OneBot 地址 | `http://127.0.0.1:58080` |
 | MCP 回调地址 | `http://127.0.0.1:36060/onebot` |
 
-Intel Mac、Windows、Linux、微信 4.1.15.54 / Build 270134，以及其他未列出的微信 Build 都不属于当前已验证范围。微信版本升级后必须重新定位偏移、更新 UUID 和做真实收发验收；不能只改一个版本字符串。
+Intel Mac、Windows、Linux，以及其他未列出的微信 Build 都不属于当前已验证范围。微信版本升级后必须重新定位偏移、更新 UUID 和做真实收发验收；不能只改一个版本字符串。
 
 ## 在另一台 Apple Silicon Mac 上安装
 
@@ -93,33 +93,31 @@ cd wechat-local-mcp
 
 上游源码和编译产物在 `vendor/`，均由 `.gitignore` 排除；公开仓库只保存固定提交说明、补丁和构建脚本。
 
-### 3. 准备匹配的微信应用和 Gadget
+### 3. 准备已安装的同版本微信副本
 
-脚本只下载和校验文件，不安装或启动应用：
+先从微信官方渠道安装上表中的精确版本。对 4.1.15，完整版本必须是 **4.1.15.54 / Build 270134**；不同 Build 会被拒绝，不会自动降级。检查已安装版本：
 
 ```sh
-.venv/bin/python scripts/download-assets.py
+.venv/bin/python scripts/doctor.py
+.venv/bin/python scripts/download-assets.py gadget
 xz -dk downloads/frida-gadget-17.8.0-macos-universal.dylib.xz
+.venv/bin/python scripts/secure-gadget.py
 ```
 
-其中微信 DMG 来自腾讯地址，Frida Gadget 来自 Frida 17.8.0 官方 Release；脚本会检查 SHA-256。然后检查并准备一个待安装副本：
+准备脚本复制 `/Applications/WeChat.app` 到项目私有目录 `runtime/security/WeChat.app`，加入 Frida Gadget、独立随机连接凭据并重签副本；核心 `wechat.dylib` 保持不变。它会核对 Build、UUID、指令指纹和签名，不操作运行中的应用。已有准备副本时会停止，避免覆盖。
 
-```sh
-.venv/bin/python scripts/stage-compatible.py
-```
+每台电脑都需要在本机准备自己的副本；GitHub 项目只包含源码、补丁和脚本，**不分发修改后的微信、凭据或用户数据**。
 
-脚本会读取包内 `Info.plist`，确认版本、Build、架构、签名和主程序摘要；结果放在被忽略的 `artifacts/` 中。它不会替换 `/Applications/WeChat.app`，也不会启动微信。
+### 4. 退出、备份并激活同版本副本
 
-### 4. 备份并安装兼容版本（可选但原生路径需要）
-
-如果当前 `/Applications/WeChat.app` 不是 4.1.11.53 / 269109，需要在微信完全退出且没有后台服务运行的维护窗口执行：
+在空闲时完全退出微信，暂停已有 OneBot/回调服务，再执行：
 
 ```sh
 .venv/bin/python scripts/backup-wechat.py
-.venv/bin/python scripts/install-staged-wechat.py
+.venv/bin/python scripts/secure-gadget.py --activate
 ```
 
-安装脚本只在备份清单完整、版本精确匹配且微信未运行时继续。首次启动兼容版后，按微信界面完成登录；不要把“应用已替换”当作数据已安全迁移。旧版和新版用户数据格式未承诺可无损互换，恢复前应再次备份当前数据。
+备份保存应用、微信容器数据和配置；激活再次检查应用未运行、当前应用及副本未被更改，并保留原应用。随后从 `/Applications/WeChat.app` 启动微信，按界面完成登录。如果重签后从图标启动立即退出，且诊断显示访问原微信容器被拒绝，需要由用户在系统隐私设置处理数据访问授权；[完全磁盘访问权限](https://support.apple.com/guide/mac-help/change-privacy-security-settings-mchl211c911f/mac)也包括其他应用的受保护数据，项目不会自动开启。当前本机的图标启动及辅助进程问题仍在处理，详见 [部署记录](docs/security-remediation.md)。本流程使用已安装的同版本微信；历史 `stage-compatible.py` / `install-staged-wechat.py` 是旧版实验流程，不是新版安装步骤。
 
 ### 5. 安装后台服务
 
@@ -177,7 +175,7 @@ MCP 名称是 `wechat-local`。文件传输助手使用 `chat_id="filehelper"`�
 git diff --check
 ```
 
-离线测试覆盖 MCP stdio、配置校验、OneBot 请求/回调、请求去重、原生 helper 输入限制和 GUI 安全边界。上游 Go 测试需要先执行 `scripts/bootstrap-upstream.py`，然后在 `vendor/wechat_chatter/onebot` 中运行 `go test ./...`。
+离线测试覆盖 MCP stdio、配置校验、OneBot 请求/回调、请求去重、原生 helper 输入限制和 GUI 安全边界。安装 Node.js 后还会执行模拟内存中的原生接收脚本测试，验证批量边界、事件过滤和去重；测试不会连接微信。上游 Go 测试需要先执行 `scripts/bootstrap-upstream.py`，然后在 `vendor/wechat_chatter/onebot` 中运行 `go test ./...`。
 
 贡献代码前请不要提交 `config.toml`、`mcp.json`、`data/`、`artifacts/`、`evidence/`、`backups/`、`downloads/`、`runtime/` 或 `vendor/` 下的本地副本。提交补丁或适配新微信版本时，请同时补充版本、架构、UUID、偏移来源和真实验收范围。
 

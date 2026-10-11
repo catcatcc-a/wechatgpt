@@ -16,6 +16,7 @@ import time
 
 from gadget_auth import ensure_token, read_token, validate_app, write_config
 from native_profile import load_profile, verify_binary_profile
+from app_signing import resign_inherited_helpers
 
 ROOT = Path(__file__).resolve().parents[1]
 APP = Path('/Applications/WeChat.app')
@@ -69,13 +70,15 @@ def prepare(source=APP):
         run('/usr/bin/codesign', '-f', '-s', '-', '--timestamp=none', gadget)
     write_config(STAGE, token)
     validate_app(STAGE, token)
+    helpers = resign_inherited_helpers(STAGE)
     run('/usr/bin/codesign', '-f', '-s', '-', '--timestamp=none', STAGE)
     prepared = inspect(STAGE)
     if prepared['core_sha256'] != original['core_sha256']:
         raise ValueError('Core library changed while preparing the app copy')
     REPORT.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     REPORT.write_text(json.dumps({'original': original, 'prepared': prepared,
-                                 'prepared_at': time.time(), 'activated': False}, indent=2) + '\n')
+                                 'prepared_at': time.time(), 'activated': False,
+                                 'resigned_inherited_helpers': helpers}, indent=2) + '\n')
     print('Authenticated app copy prepared and signature verified. Live app unchanged.')
 
 

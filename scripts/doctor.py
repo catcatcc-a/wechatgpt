@@ -14,6 +14,8 @@ import re
 import shutil
 import subprocess
 
+from native_profile import load_profile, verify_binary_profile
+
 
 PROJECT = Path(__file__).resolve().parent.parent
 CORE_OFFSETS = {
@@ -126,6 +128,15 @@ def diagnose(app: Path, project: Path = PROJECT) -> dict:
     configs = [inspect_config(path, app_version, app_build)
                for path in sorted((vendor / "wechat_version").glob("*_mac.json"))]
     candidates = [item["file"] for item in configs if item["candidate_for_installed_version"]]
+    native = {"profile": None, "binary_matches": False, "profile_runtime_verified": False}
+    try:
+        profile, path = load_profile(app, project)
+        verify_binary_profile(app / "Contents/Resources/wechat.dylib", profile)
+        native.update(profile=path.name, binary_matches=True,
+                      profile_runtime_verified=bool(profile.get("runtime_verified")),
+                      receive_only=bool(profile.get("receive_only")))
+    except (OSError, ValueError, KeyError, TypeError):
+        native["reason"] = "No enabled native profile with matching build, UUID and instruction fingerprints"
     commit_code, commit_output = run_read_only(["git", "-C", str(vendor), "rev-parse", "HEAD"])
     commit = commit_output.strip() if commit_code == 0 and re.fullmatch(r"[0-9a-f]{40}\s*", commit_output) else None
     go_version = None
@@ -157,7 +168,9 @@ def diagnose(app: Path, project: Path = PROJECT) -> dict:
             "config_directory_present": (vendor / "wechat_version").is_dir(),
             "configs": configs,
             "candidate_configs": candidates,
-            "compatibility": "candidate_config_runtime_unverified" if candidates else "no_matching_version_config",
+            "native": native,
+            "compatibility": "native_profile_binary_matches" if native["binary_matches"] else
+                             "candidate_config_runtime_unverified" if candidates else "no_matching_version_config",
             "runtime_verified": False,
             "binary_present": (vendor / "onebot/onebot").is_file(),
             "go_version": go_version,
