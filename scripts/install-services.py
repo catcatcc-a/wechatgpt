@@ -28,6 +28,21 @@ def check_profile():
     verify_binary_profile(APP / 'Contents/Resources/wechat.dylib', profile)
 
 
+def bootstrap_agent(path):
+    # bootout can return before launchd finishes releasing the old service.
+    # Retry its transient bootstrap EIO without stopping a running WeChat.
+    for delay in (0, 0.2, 0.5, 1, 2):
+        if delay:
+            time.sleep(delay)
+        result = subprocess.run(["launchctl", "bootstrap", f"gui/{os.getuid()}", str(path)],
+                                capture_output=True)
+        if result.returncode == 0:
+            return
+        if result.returncode != 5:
+            break
+    result.check_returncode()
+
+
 def main():
     os.umask(0o077)
     # Fail before stopping working services if the app/client credentials differ.
@@ -117,7 +132,7 @@ enabled = false
         }
         path = AGENTS / f"local.wechat-mcp.{name}.plist"
         path.write_bytes(plistlib.dumps(plist))
-        subprocess.run(["launchctl", "bootstrap", f"gui/{os.getuid()}", str(path)], check=True)
+        bootstrap_agent(path)
     time.sleep(2)
     print(json.dumps({"runtime": str(RUNTIME), "services": ["local.wechat-mcp.webhook", "local.wechat-mcp.onebot"]}))
 

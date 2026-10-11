@@ -48,3 +48,22 @@ def test_installer_preserves_token_and_restricts_permissions(tmp_path, monkeypat
     assert target.stat().st_mode & 0o777 == 0o600
     assert (runtime / 'data/gadget.token').read_text().strip() == gadget_token
     assert (runtime / 'data/gadget.token').stat().st_mode & 0o777 == 0o600
+
+
+def test_bootstrap_retries_transient_launchd_unload_race(monkeypatch, tmp_path):
+    spec = importlib.util.spec_from_file_location(
+        'install_services', Path(__file__).resolve().parents[1] / 'scripts/install-services.py')
+    installer = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(installer)
+    outcomes = iter([5, 5, 0])
+    calls, waits = [], []
+
+    def run(args, **kwargs):
+        calls.append(args)
+        return subprocess.CompletedProcess(args, next(outcomes))
+
+    monkeypatch.setattr(installer.subprocess, 'run', run)
+    monkeypatch.setattr(installer.time, 'sleep', waits.append)
+    installer.bootstrap_agent(tmp_path / 'service.plist')
+    assert len(calls) == 3
+    assert waits == [0.2, 0.5]

@@ -315,10 +315,14 @@ index f10835b..1e73ff8 100644
 +	return result
 +}
 diff --git a/onebot/main.go b/onebot/main.go
-index a72d50b..2fbb9ff 100644
+index a72d50b..b068279 100644
 --- a/onebot/main.go
 +++ b/onebot/main.go
-@@ -5,8 +5,6 @@ import (
+@@ -2,11 +2,10 @@ package main
+ 
+ import (
+ 	"bytes"
++	"context"
  	"encoding/json"
  	"flag"
  	"fmt"
@@ -327,7 +331,7 @@ index a72d50b..2fbb9ff 100644
  	"os"
  	"os/signal"
  	"runtime/debug"
-@@ -20,6 +18,18 @@ import (
+@@ -20,6 +19,18 @@ import (
  
  func main() {
  	initFlag()
@@ -346,7 +350,7 @@ index a72d50b..2fbb9ff 100644
  	initLogger()
  	if config.FridaType == "gadget" {
  		initFridaGadget()
-@@ -29,26 +39,22 @@ func main() {
+@@ -29,26 +40,22 @@ func main() {
  	go SendWorker()
  	go cleanExpiredDownloads()
  
@@ -379,7 +383,7 @@ index a72d50b..2fbb9ff 100644
  		Error("服务启动失败", "err", err)
  	}
  
-@@ -59,7 +65,9 @@ func initFlag() {
+@@ -59,7 +66,9 @@ func initFlag() {
  	flag.StringVar(&config.SendURL, "send_url", "http://127.0.0.1:36060/onebot", "发送消息的 URL: http://127.0.0.1:36060/onebot")
  	flag.StringVar(&config.ReceiveHost, "receive_host", "127.0.0.1:58080", "接收消息的地址: 127.0.0.1:58080")
  	flag.StringVar(&config.FridaGadgetAddr, "gadget_addr", "127.0.0.1:27042", "Gadget 地址: 127.0.0.1:27042 仅当 type 为 gadget 时有效")
@@ -390,7 +394,7 @@ index a72d50b..2fbb9ff 100644
  	flag.StringVar(&config.ImagePath, "image_path", "", "图片路径: /Users/xxx/Library/Containers/com.tencent.xinWeChat/Data/Documents/xwechat_files/xxx/temp/xxx/2026-01/Img/")
  	flag.StringVar(&config.WechatConf, "wechat_conf", "../wechat_version/4_1_11_53_mac.json", "微信配置文件路径: ../wechat_version/4_1_6_12_mac.json")
  	flag.StringVar(&config.ConnType, "conn_type", "http", "连接类型: http | websocket")
-@@ -68,6 +76,9 @@ func initFlag() {
+@@ -68,6 +77,9 @@ func initFlag() {
  	flag.StringVar(&logLevel, "log_level", "info", "log level")
  
  	flag.Parse()
@@ -400,7 +404,7 @@ index a72d50b..2fbb9ff 100644
  
  	if myWechatId == "" && config.ImagePath != "" {
  		if idx := strings.Index(config.ImagePath, "xwechat_files/"); idx != -1 {
-@@ -86,9 +97,6 @@ func initFlag() {
+@@ -86,9 +98,6 @@ func initFlag() {
  	fmt.Println("SendURL", config.SendURL)
  	fmt.Println("ReceiveHost", config.ReceiveHost)
  	fmt.Println("FridaGadgetAddr", config.FridaGadgetAddr)
@@ -410,7 +414,7 @@ index a72d50b..2fbb9ff 100644
  	fmt.Println("ConnType", config.ConnType)
  	fmt.Println("SendInterval", config.SendInterval)
  	fmt.Println("WechatPid", config.WechatPid)
-@@ -99,7 +107,10 @@ func initFridaGadget() {
+@@ -99,7 +108,10 @@ func initFridaGadget() {
  	var err error
  	mgr := frida.NewDeviceManager()
  	// 连接到 Gadget 默认端口
@@ -422,7 +426,7 @@ index a72d50b..2fbb9ff 100644
  	if err != nil {
  		Fatal("❌ 无法连接 Gadget", err)
  	}
-@@ -111,6 +122,14 @@ func initFridaGadget() {
+@@ -111,6 +123,14 @@ func initFridaGadget() {
  
  	loadJs()
  
@@ -437,7 +441,7 @@ index a72d50b..2fbb9ff 100644
  }
  
  func initFrida() {
-@@ -167,7 +186,7 @@ func loadJs() {
+@@ -167,7 +187,7 @@ func loadJs() {
  		Fatal("解析 JSON 失败", "err", err)
  	}
  
@@ -446,7 +450,7 @@ index a72d50b..2fbb9ff 100644
  	if err != nil {
  		Fatal("读取脚本失败", "err", err)
  	}
-@@ -235,7 +254,8 @@ func loadJs() {
+@@ -235,7 +255,8 @@ func loadJs() {
  												rawBytes[i] = byte(int(f))
  											}
  										}
@@ -456,6 +460,21 @@ index a72d50b..2fbb9ff 100644
  									}
  								}
  							}()
+@@ -349,5 +370,14 @@ func loadJs() {
+ 	}
+ 
+ 	fridaScript = script
++	// Gadget can accept attachments before WeChat loads its core library.
++	// A JavaScript initialization exception does not make Script.Load fail.
++	// Exit on a failed live probe so launchd retries after the app is ready.
++	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
++	defer cancel()
++	state, ok := script.ExportsCallWithContext(ctx, "localStatus").(map[string]any)
++	if !ok || state["hook_verified"] != true {
++		Fatal("Hook initialization not ready; service restart required")
++	}
+ 	Info("✅ Frida 已就绪，微信控制通道已打通")
+ }
 diff --git a/onebot/param.go b/onebot/param.go
 index 9520047..8af1604 100644
 --- a/onebot/param.go

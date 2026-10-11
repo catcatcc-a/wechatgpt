@@ -107,3 +107,5 @@ git apply ../../patches/wechat_chatter-local-auth.patch
 - 日志采用数值指标白名单，移除原始错误、JS payload、媒体密钥和文件转储。
 - `-receive_only` 和 `-hook_script` 支持新版接收观察器；此模式拒绝旧 HTTP/WS 网络发送并跳过旧媒体处理 RPC。原生文本发送由 MCP helper 完成。
 - 新版的地址与布局存在项目 `native/` manifest，不向上游 JSON 填入猜测的媒体偏移。4.1.15.54 / 270134 目前仍待真实收发验收，见 [适配说明](../docs/wechat-4.1.15.md)。
+
+启动修复：脚本加载后必须在限时 RPC 中确认 `hook_verified`；Gadget 早于核心库就绪时退出并由 launchd 重试，避免 HTTP 服务已启动但接收 Hook 永久缺失。
