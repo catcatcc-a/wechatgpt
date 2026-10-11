@@ -54,3 +54,5 @@ git -C vendor/wechat_chatter apply ../../patches/wechat_chatter-local-auth.patch
 公开发布前请先检查 README、许可证、忽略规则和 `git diff --cached`；不要把本地 token、聊天缓存、截图或微信备份上传到远程仓库。
 
 可重复的索引及历史检查、源码归档方法和待确认事项见 [发布审阅](release-review.md)。执行 `scripts/check_public_tree.py --history` 只检查 Git 中的内容，不修改微信或运行服务；不要用“工作目录看起来干净”替代对已提交历史的检查。
+
+本机已设置 `core.hooksPath=.githooks`，每次提交或推送前检查索引、所有本地对象和存在的凭据文件。新克隆不会自动启用钩子；可在审查钩子后执行 `git config --local core.hooksPath .githooks`。源码包请用 `scripts/export-public-source.py` 生成；操作和清理范围见 [隐私清理与复查](privacy-cleanup.md)。

@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
-"""Check the Git index, optionally all reachable history, without printing secrets.
+"""Check staged content, names and optional Git history without printing secrets.
 
 This is a small project-specific publication check, not a comprehensive secret
-scanner. Untracked files, reflogs and unreachable objects are outside its scope.
+scanner. --all-objects also checks unreachable objects. Untracked files and local
+Git configuration/reflogs are outside its scope. Findings use opaque locations
+so a private filename does not itself leak through a CI log.
 """
 import argparse
 import fnmatch
+import hashlib
 import json
 from pathlib import Path, PurePosixPath
 import re
@@ -15,10 +18,13 @@ import subprocess
 PRIVATE_DIRS = {
     'data', 'artifacts', 'evidence', 'logs', 'runtime', 'backups', 'downloads',
     'bin', '.venv', '.re-venv', '.secrets', '__pycache__', 'dist', 'build',
+    'screenshots', 'captures', 'diagnostics', 'secrets',
 }
 PRIVATE_NAMES = {'AGENTS.md', 'config.toml', 'config.onebot.toml', 'mcp.json', '.DS_Store'}
 PRIVATE_GLOBS = ('*.token', '*.key', '*.pem', '*.log', '*.db*', '*.sqlite*',
-                 '*.dmg', '*.dylib', '*.a', '*.png', '*.jpg', '*.zip', '*.local.toml')
+                 '*.dmg', '*.dylib', '*.a', '*.png', '*.jpg', '*.jpeg', '*.heic',
+                 '*.webp', '*.gif', '*.pdf', '*.zip', '*.tar', '*.gz', '*.tgz',
+                 '*.xz', '*.bz2', '*.7z', '*.local.toml')
 PATTERNS = {
     'private-key': re.compile(rb'-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY-----'),
     'github-token': re.compile(rb'\b(?:gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{40,})\b'),
@@ -42,21 +48,29 @@ def private_path(name):
     )
 
 
-def scan(root, history=False, secrets=()):
+def path_location(name):
+    return 'path-sha256:' + hashlib.sha256(name.encode()).hexdigest()[:16]
+
+
+def scan(root, history=False, secrets=(), all_objects=False):
+    history = history or all_objects
     findings, objects, checked = set(), set(), set()
+
+    def content(data, location):
+        for rule, pattern in PATTERNS.items():
+            if pattern.search(data):
+                findings.add((location, rule))
+        if any(secret in data for secret in secrets):
+            findings.add((location, 'known-local-secret'))
 
     def inspect(oid, kind):
         if oid in checked:
             return
         checked.add(oid)
         data = git(root, 'cat-file', kind, oid)
-        for rule, pattern in PATTERNS.items():
-            if pattern.search(data):
-                findings.add((oid, rule))
+        content(data, oid)
         if kind == 'blob' and b'\0' in data:
             findings.add((oid, 'binary-content'))
-        if any(secret in data for secret in secrets):
-            findings.add((oid, 'known-local-secret'))
 
     def paths(entries):
         for entry in entries.split(b'\0'):
@@ -67,12 +81,14 @@ def scan(root, history=False, secrets=()):
             # Index: mode oid stage. Tree: mode type oid.
             oid = last if middle in {'blob', 'commit'} else middle
             name = raw_name.decode('utf-8', errors='replace')
+            location = path_location(name)
+            content(raw_name, location)
             if private_path(name):
-                findings.add((name, 'private-path'))
+                findings.add((location, 'private-path'))
             if mode not in {'100644', '100755'}:
-                findings.add((name, 'non-regular-file'))
+                findings.add((location, 'non-regular-file'))
             if middle not in {'blob', 'commit'} and last != '0':
-                findings.add((name, 'unmerged-index'))
+                findings.add((location, 'unmerged-index'))
             if mode in {'100644', '100755', '120000'}:
                 objects.add(oid)
 
@@ -90,9 +106,17 @@ def scan(root, history=False, secrets=()):
             kind = git(root, 'cat-file', '-t', oid).decode().strip()
             if kind in {'blob', 'tag'}:
                 inspect(oid, kind)
+    if all_objects:
+        for entry in git(root, 'cat-file', '--batch-all-objects',
+                         '--batch-check=%(objectname) %(objecttype)').decode().splitlines():
+            oid, kind = entry.split()
+            inspect(oid, kind)
+            if kind == 'tree':
+                paths(git(root, 'ls-tree', '-rz', '--full-tree', oid))
     for oid in sorted(objects):
         inspect(oid, 'blob')
-    return {'ok': not findings, 'scope': 'index_and_reachable_history' if history else 'index',
+    scope = 'index_and_all_local_objects' if all_objects else 'index_and_reachable_history' if history else 'index'
+    return {'ok': not findings, 'scope': scope,
             'checked_objects': len(checked),
             'findings': [{'location': location, 'rule': rule} for location, rule in sorted(findings)]}
 
@@ -100,6 +124,8 @@ def scan(root, history=False, secrets=()):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--history', action='store_true')
+    parser.add_argument('--all-objects', action='store_true',
+                        help='Include reachable history and dangling/unreachable local Git objects')
     parser.add_argument('--secret-file', action='append', type=Path, default=[],
                         help='Compare a local token file without printing its contents; repeatable')
     args = parser.parse_args()
@@ -110,7 +136,7 @@ def main():
         if len(value) < 16:
             parser.error('Secret files must contain at least 16 bytes')
         secrets.append(value)
-    result = scan(root, args.history, secrets)
+    result = scan(root, args.history, secrets, all_objects=args.all_objects)
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0 if result['ok'] else 1
 

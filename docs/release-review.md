@@ -20,6 +20,7 @@
 - GitHub 工作流通过 actionlint 1.7.7 静态检查；云端执行尚未发生。
 - 索引及可达历史的发布检查通过；额外对全部本地 Git 内容对象比对真实凭据、已知联系人信息和本机路径，未发现命中。提交身份均为项目中性身份，未配置远程仓库。
 - Markdown 本地文件链接及暂存 diff 空白检查通过。
+- 后续隐私清理与发布保护更新完成后，本机全套 **81 项测试通过**；新增测试验证敏感文件名、不可达对象和源码归档边界。前述干净 Python 3.11 的 75 项结果是更新前的独立验证，未将二者混同。
 
 这些检查不重启微信、不重载后台服务，也不发送测试消息。源码发布检查不是全面漏洞扫描或实机兼容性保证。
 
@@ -55,18 +56,16 @@ git log --format=fuller
   --secret-file data/onebot.token
 ```
 
-脚本只输出命中位置和规则，不输出密钥；检查索引及所有本地引用可达的提交、标签和 blob。浅克隆不能作为完整历史审查，会返回失败。它不扫描不可达对象、reflog、未跟踪文件，也不能自动识别所有姓名和聊天内容。提交身份、文件内容和发布包仍需人工检查；不要直接压缩工作目录上传。
+脚本只输出对象 ID/路径摘要和规则，不输出密钥或敏感文件名；检查索引及所有本地引用可达的提交、标签和 blob。使用 `--all-objects` 还会检查不可达对象；`sh scripts/check-publication.sh` 默认启用该范围，并在本机 token 文件存在时自动进行真实值比对。浅克隆不能作为完整历史审查，会返回失败。reflog、仓库配置及未跟踪文件需另行检查，工具也不能自动识别所有姓名和聊天内容。提交身份、文件内容和发布包仍需人工检查；不要直接压缩工作目录上传。
 
 源码归档应来自审阅通过的 Git 提交，例如：
 
 ```sh
-mkdir -p dist
-git archive --format=tar.gz --prefix=wechat-local-mcp/ \
-  --output=dist/wechat-local-mcp-source-review.tar.gz HEAD
-tar -tzf dist/wechat-local-mcp-source-review.tar.gz
+.venv/bin/python scripts/export-public-source.py \
+  --output artifacts/open-source-review/wechat-local-mcp-source.tar.gz
 ```
 
-归档只包含该提交的文件，没有 `.git`、未提交修改和被忽略的本机数据。许可证及上游补丁应随源码保留。
+工具拒绝未提交的受管理文件变动和已经存在的输出文件；先扫描全部本地 Git 对象，再核对归档条目及所有者元数据，输出提交 ID 和 SHA-256。归档只包含该提交的文件，没有 `.git`、未提交修改和被忽略的本机数据。许可证及上游补丁应随源码保留。本机旧日志和临时采样材料已清理，详见 [隐私清理与复查](privacy-cleanup.md)。
 
 ## 当前未完成事项
 

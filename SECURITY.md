@@ -16,10 +16,19 @@ issue when no private channel is available.
 
 The local OneBot cache and upstream runtime logs can contain message text,
 chat identifiers, media metadata, and file paths. Treat them as private user
-data: keep the runtime directory owner-only, redact them before sharing, and
-remove local evidence before creating a public archive. The tracked patch
+data: keep the runtime directory owner-only and redact them before sharing.
+Create public archives with `scripts/export-public-source.py`, which exports a
+checked Git commit instead of the working directory. The tracked patch
 reduces request and response logging to byte counts, but it cannot protect
 data already captured by an older runtime.
+
+Publication checks include staged file names/content and optionally all local
+Git objects, including unreachable ones. Finding locations are opaque so private
+file names do not leak through check output. Local commit/push hooks are opt-in
+with `git config --local core.hooksPath .githooks`; they compare local credential
+files when present. They do not replace manual review of personal information.
+See [privacy cleanup](docs/privacy-cleanup.md) for the local cleanup scope and
+the data intentionally kept private for normal operation and recovery.
 
 Frida Gadget uses an independent random token on `127.0.0.1:27042`. The token
 file and the configuration inside the modified app must both be owner-only
