@@ -1,4 +1,4 @@
-// Pinned WeChat 4.1.11.53 ARM64 native text pipeline; offsets are build-specific.
+// ARM64 native text pipeline; the exact module UUID selects a checked ABI profile.
 'use strict';
 const module = Process.enumerateModules().find(m => m.name === 'wechat.dylib' && m.size > 50000000);
 if (!module || Process.arch !== 'arm64') throw new Error('Unsupported native module');
@@ -9,18 +9,23 @@ for(let i=0;i<base.add(16).readU32();i++) {
     if(command.readU32()===0x1b)moduleUuid=Array.from(new Uint8Array(command.add(8).readByteArray(16))).map(x=>x.toString(16).padStart(2,'0')).join('');
     command=command.add(command.add(4).readU32());
 }
-if(typeof EXPECTED_MODULE_UUID==='undefined'||moduleUuid!==EXPECTED_MODULE_UUID)throw new Error('Unsupported WeChat native build UUID');
+if(typeof PROFILE==='undefined'||moduleUuid!==PROFILE.module_uuid)throw new Error('Unsupported WeChat native build UUID');
+const offsets = PROFILE.offsets, layout = PROFILE.layout;
+for (const [name, expected] of Object.entries(PROFILE.fingerprints || {})) {
+    const actual = Array.from(new Uint8Array(base.add(offsets[name]).readByteArray(expected.length / 2))).map(x => x.toString(16).padStart(2, '0')).join('');
+    if (actual !== expected) throw new Error('Native instruction fingerprint mismatch: ' + name);
+}
 const keep = [];
 const callbacks = new Map();
 const makeNative = (offset, result, args) => new NativeFunction(base.add(offset), result, args);
-const allocate = makeNative(0x67b35b0, 'pointer', ['uint64']);
-const release = makeNative(0x67b358c, 'void', ['pointer', 'uint64']);
-const taskCtor = makeNative(0x32718, 'void', ['pointer', 'pointer', 'pointer']);
-const post = makeNative(0x436e480, 'uint64', ['pointer', 'pointer', 'pointer', 'int']);
+const allocate = makeNative(offsets.allocate, 'pointer', ['uint64']);
+const release = makeNative(offsets.release, 'void', ['pointer', 'uint64']);
+const taskCtor = makeNative(offsets.taskCtor, 'void', ['pointer', 'pointer', 'pointer']);
+const post = makeNative(offsets.post, 'uint64', ['pointer', 'pointer', 'pointer', 'int']);
 const location = Memory.alloc(32);
 const locationName = Memory.allocUtf8String('WeChatLocalMCP');
 location.writePointer(locationName); location.add(8).writePointer(locationName);
-location.add(16).writeU32(1); location.add(24).writePointer(base.add(0x436e480));
+location.add(16).writeU32(1); location.add(24).writePointer(base.add(offsets.post));
 keep.push(location, locationName);
 
 function sret(offset, argc) {
@@ -56,17 +61,17 @@ function cppstr(p) {
     if(size>8192)throw new Error('Invalid native string');
     return (flag<128?p:p.readPointer()).readUtf8String(size);
 }
-const paramCtor = makeNative(0x6bdd8c,'pointer',['pointer']);
-const stringAssign = makeNative(0x67b2e3c,'pointer',['pointer','pointer']);
-const pairRelease = makeNative(0x12aeb4,'void',['pointer']);
-const nativeSubmit = makeNative(0x399a8b0,'void',['pointer','pointer']);
+const paramCtor = makeNative(offsets.paramCtor,'pointer',['pointer']);
+const stringAssign = makeNative(offsets.stringAssign,'pointer',['pointer','pointer']);
+const pairRelease = makeNative(offsets.pairRelease,'void',['pointer']);
+const nativeSubmit = makeNative(offsets.nativeSubmit,'void',['pointer','pointer']);
 let pending = null;
-Interceptor.attach(base.add(0xd1ee1c), {onEnter(a) {
+Interceptor.attach(base.add(offsets.recordCopy), {onEnter(a) {
     if(!pending)return;
     try {
         const p=a[1];
         if(cppstr(p.add(0x30))!==pending.chatId||cppstr(p.add(0x130))!==pending.text)return;
-        if(pending.messageKey && cppstr(p.add(0x250))!==pending.messageKey)return;
+        if(pending.messageKey && cppstr(p.add(layout.recordMessageKey))!==pending.messageKey)return;
         const state=p.add(0x118).readU32(), serverId=p.add(0xf8).readU64().toString();
         if(state===2&&serverId!=='0') {
             const current=pending;pending=null;
@@ -81,11 +86,12 @@ function assign(p,text) {
     stringAssign(p,temp);
 }
 function parameters(text,chatId='filehelper') {
-    const block=allocate(0x5c8);paramCtor(block);
+    const block=allocate(layout.allocation);paramCtor(block);
     const p=block.add(0x18),pair=Memory.alloc(16);
     pair.writePointer(p);pair.add(8).writePointer(block);
-    assign(p.add(0x90),chatId);assign(p.add(0x580),text);
-    p.add(0xb0).writeU32(1);p.add(0xb4).writeU32(0);
+    if (!p.readPointer().equals(base.add(PROFILE.param_vtable))) throw new Error('Native parameter type mismatch');
+    assign(p.add(layout.recipient),chatId);assign(p.add(layout.text),text);
+    p.add(layout.type).writeU32(1);p.add(layout.subtype).writeU32(0);
     return {p,pair};
 }
 rpc.exports = {
@@ -95,7 +101,7 @@ rpc.exports = {
     probe: () => queued(() => ({thread:Process.getCurrentThreadId(),pending:callbacks.size})),
     prepare: text => queued(() => {
         const {p,pair}=parameters(text);
-        const result={recipient:cppstr(p.add(0x90)),text:cppstr(p.add(0x580)),message_key:cppstr(p.add(0x538)),type:p.add(0xb0).readU32(),vtable:String(p.readPointer().sub(base))};
+        const result={recipient:cppstr(p.add(layout.recipient)),text:cppstr(p.add(layout.text)),message_key:cppstr(p.add(layout.messageKey)),type:p.add(layout.type).readU32(),vtable:String(p.readPointer().sub(base))};
         pairRelease(pair);return result;
     }),
     sendText: (chatId,text) => {
@@ -108,10 +114,10 @@ rpc.exports = {
                 const {p,pair}=parameters(text,chatId),request=Memory.alloc(32),callback=Memory.alloc(0x88),flagOwner=allocate(0x20);
                 // Native shared ownership with a trivial scalar destructor and
                 // sized 0x20-byte deleter. All callback copies retain this owner.
-                flagOwner.writePointer(base.add(0x8fe91c0));
+                flagOwner.writePointer(base.add(offsets.flagVtable));
                 flagOwner.add(8).writeU64(0);flagOwner.add(16).writeU64(0);flagOwner.add(24).writeU64(0);
                 const done=flagOwner.add(24);
-                state.messageKey=cppstr(p.add(0x538));
+                state.messageKey=cppstr(p.add(layout.messageKey));
                 request.add(8).writePointer(pair);request.add(16).writePointer(pair.add(16));request.add(24).writePointer(pair.add(16));
                 callback.writePointer(done);callback.add(8).writePointer(flagOwner);callback.add(0x70).writeU64(Date.now()*1000+Math.floor(Math.random()*1000));
                 keep.push(request,callback,done,pair);

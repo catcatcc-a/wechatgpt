@@ -12,6 +12,8 @@ import plistlib
 import re
 import sys
 import time
+from gadget_auth import connect
+from native_profile import load_profile, sender_code
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -29,11 +31,7 @@ def validate(payload):
 
 
 def preflight():
-    manifest = json.loads((ROOT / 'native/wechat-4.1.11.53.json').read_text())
-    info = plistlib.loads(Path('/Applications/WeChat.app/Contents/Info.plist').read_bytes())
-    if info.get('CFBundleShortVersionString') not in {'4.1.11', manifest['version']} or str(info.get('CFBundleVersion')) != manifest['build']:
-        raise RuntimeError('Native sending supports only WeChat 4.1.11.53 Build 269109')
-    return manifest
+    return load_profile(root=ROOT)[0]
 
 
 def main():
@@ -49,9 +47,8 @@ def main():
         lock_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
         with (lock_dir / 'native-send.lock').open('a') as lock:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            session = frida.get_device_manager().add_remote_device('127.0.0.1:27042').attach('Gadget')
-            code = 'const EXPECTED_MODULE_UUID=' + json.dumps(manifest['module_uuid']) + ';\n'
-            script = session.create_script(code + (ROOT / 'native/wechat_send.js').read_text())
+            session = connect(frida).attach('Gadget')
+            script = session.create_script(sender_code(manifest, ROOT))
             script.load()
             script.exports_sync.probe()
             attempted = True

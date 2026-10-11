@@ -14,14 +14,29 @@ import sqlite3
 import subprocess
 import time
 import secrets
+from gadget_auth import read_token, validate_app
+from native_profile import load_profile, verify_binary_profile
 
 ROOT = Path(__file__).resolve().parents[1]
 RUNTIME = Path.home() / "Library/Application Support/WeChatLocalMCP"
 AGENTS = Path.home() / "Library/LaunchAgents"
+APP = Path('/Applications/WeChat.app')
+
+
+def check_profile():
+    profile, _ = load_profile(APP, ROOT)
+    verify_binary_profile(APP / 'Contents/Resources/wechat.dylib', profile)
 
 
 def main():
     os.umask(0o077)
+    # Fail before stopping working services if the app/client credentials differ.
+    gadget_token = read_token(ROOT / 'data/gadget.token')
+    validate_app(APP, gadget_token)
+    check_profile()
+    for path in (RUNTIME / 'data/gadget.token', RUNTIME / 'data/onebot.token'):
+        if path.is_symlink():
+            raise RuntimeError('Refusing a symlink at a runtime credential destination')
     # An existing runtime venv is preserved; refuse an incomplete upgrade before
     # stopping any services. setup.sh installs the pinned Frida dependency.
     for python in (ROOT / '.venv/bin/python', RUNTIME / '.venv/bin/python'):
@@ -30,6 +45,7 @@ def main():
             if check.returncode:
                 raise RuntimeError(f'Install frida==17.8.0 into {python} before deploying native sending')
     RUNTIME.mkdir(parents=True, exist_ok=True, mode=0o700)
+    RUNTIME.chmod(0o700)
     AGENTS.mkdir(parents=True, exist_ok=True)
     for name in ("onebot", "webhook"):
         subprocess.run(["launchctl", "bootout", f"gui/{os.getuid()}/local.wechat-mcp.{name}"], capture_output=True)
@@ -49,7 +65,13 @@ def main():
         shutil.copy2(ROOT / relative, destination)
     data = RUNTIME / "data"
     data.mkdir(exist_ok=True, mode=0o700)
+    data.chmod(0o700)
     (data / "logs").mkdir(exist_ok=True, mode=0o700)
+    (data / "logs").chmod(0o700)
+    gadget_destination = data / 'gadget.token'
+    gadget_destination.touch(mode=0o600, exist_ok=True)
+    gadget_destination.chmod(0o600)
+    gadget_destination.write_text(gadget_token + '\n')
     if not (data / "onebot.token").exists():
         source_token = ROOT / "data/onebot.token"
         if source_token.is_file():
@@ -84,6 +106,7 @@ enabled = false
     }.items():
         log = data / "logs" / f"{name}.log"
         log.touch(mode=0o600, exist_ok=True)
+        log.chmod(0o600)
         plist = {
             "Label": f"local.wechat-mcp.{name}", "ProgramArguments": argv,
             "WorkingDirectory": str(RUNTIME), "RunAtLoad": True,

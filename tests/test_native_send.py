@@ -59,3 +59,13 @@ async def test_missing_native_helper_is_not_sent(tmp_path):
     config = Config(data_dir=tmp_path, native_sender_command=(str(tmp_path/'missing'), 'helper.py'))
     result = await OneBotBackend(config, Store(config.database)).send_text('filehelper', 'test')
     assert result['transmission'] == 'not_sent'
+
+
+async def test_native_ready_does_not_require_legacy_network_template(tmp_path):
+    config = Config(data_dir=tmp_path, native_sender_command=('python', 'helper.py'))
+    transport = httpx.MockTransport(lambda r: httpx.Response(200, json={
+        'hook_verified': True, 'send_template_ready': False, 'native_sender_supported': True}))
+    status = await OneBotBackend(config, Store(config.database), transport=transport).status()
+    assert status['ready'] is True
+    assert status['send_template_ready'] is False
+    assert status['login_verified'] is False

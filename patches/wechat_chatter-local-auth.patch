@@ -1,8 +1,83 @@
+diff --git a/onebot/file_builder.go b/onebot/file_builder.go
+index 6e617bc..2b84d23 100644
+--- a/onebot/file_builder.go
++++ b/onebot/file_builder.go
+@@ -54,7 +54,7 @@ func BuildFileUploadMsgProto(targetId string, fileInfo *FileInfo) (string, error
+ 		return "", fmt.Errorf("marshal file upload msg proto failed: %w", err)
+ 	}
+ 
+-	fmt.Printf("[file-upload-proto] final protobuf hex dump:\n%s\n", HexDump(data, 0))
++	Debug("file upload encoded", "bytes", len(data))
+ 	return hex.EncodeToString(data), nil
+ }
+ 
+@@ -154,7 +154,7 @@ func BuildFileMsgProto(sender, receiver string, fileInfo *FileInfo) (string, err
+ 		return "", fmt.Errorf("marshal file proto failed: %w", err)
+ 	}
+ 
+-	fmt.Printf("[file-proto] final protobuf hex dump:\n%s\n", HexDump(data, 0))
++	Debug("file message encoded", "bytes", len(data))
+ 
+ 	return hex.EncodeToString(data), nil
+ }
+diff --git a/onebot/gadget_integration_test.go b/onebot/gadget_integration_test.go
+new file mode 100644
+index 0000000..9f07fc2
+--- /dev/null
++++ b/onebot/gadget_integration_test.go
+@@ -0,0 +1,37 @@
++package main
++
++import (
++	"github.com/frida/frida-go/frida"
++	"os"
++	"testing"
++)
++
++// The harness supplies an isolated dummy process, never the WeChat listener.
++func TestIsolatedGadgetAuthentication(t *testing.T) {
++	address := os.Getenv("WECHAT_TEST_GADGET_ADDR")
++	if address == "" {
++		t.Skip("run scripts/test-gadget-auth.py for isolated Frida integration")
++	}
++	if address == "127.0.0.1:27042" {
++		t.Fatal("refusing live WeChat port")
++	}
++	token, err := readGadgetToken(os.Getenv("WECHAT_TEST_GADGET_TOKEN_FILE"))
++	if err != nil {
++		t.Fatal(err)
++	}
++	for _, testToken := range []string{"", "wrong-token", token} {
++		manager := frida.NewDeviceManager()
++		options := frida.NewRemoteDeviceOptions()
++		options.SetToken(testToken)
++		device, err := manager.AddRemoteDevice(address, options)
++		options.Clean()
++		if err == nil {
++			_, err = device.EnumerateProcesses(frida.ScopeMinimal)
++			manager.RemoveRemoteDevice(address)
++		}
++		manager.Clean()
++		if (testToken == token) != (err == nil) {
++			t.Fatal("unexpected Gadget authentication outcome")
++		}
++	}
++}
 diff --git a/onebot/http.go b/onebot/http.go
-index a230d34..5bcca92 100644
+index a230d34..7c24a83 100644
 --- a/onebot/http.go
 +++ b/onebot/http.go
-@@ -22,13 +22,6 @@ func sendHandler(w http.ResponseWriter, r *http.Request) {
+@@ -16,23 +16,18 @@ import (
+ )
+ 
+ func sendHandler(w http.ResponseWriter, r *http.Request) {
++	if config.ReceiveOnly {
++		http.Error(w, "Use the MCP native text sender for this build", http.StatusNotImplemented)
++		return
++	}
+ 	if r.Method != http.MethodPost {
+ 		http.Error(w, "仅支持 POST", http.StatusMethodNotAllowed)
+ 		Error("仅支持 POST")
  		return
  	}
  
@@ -14,9 +89,14 @@ index a230d34..5bcca92 100644
 -	}
 -
  	req := new(SendRequest)
- 	if err := json.NewDecoder(r.Body).Decode(req); err != nil {
- 		http.Error(w, "无效的 JSON", http.StatusBadRequest)
-@@ -181,7 +174,7 @@ func SendHttpReq(jsonData []byte) {
+-	if err := json.NewDecoder(r.Body).Decode(req); err != nil {
+-		http.Error(w, "无效的 JSON", http.StatusBadRequest)
+-		Error("无效的 JSON")
++	if !decodeSendRequest(w, r, req) {
+ 		return
+ 	}
+ 
+@@ -181,7 +176,7 @@ func SendHttpReq(jsonData []byte) {
  		return
  	}
  
@@ -25,7 +105,7 @@ index a230d34..5bcca92 100644
  	req, err := http.NewRequest("POST", config.SendURL, bytes.NewBuffer(jsonReq))
  	if err != nil {
  		Error("创建请求失败", "err", err)
-@@ -212,7 +205,7 @@ func SendHttpReq(jsonData []byte) {
+@@ -212,7 +207,7 @@ func SendHttpReq(jsonData []byte) {
  		return
  	}
  
@@ -34,27 +114,231 @@ index a230d34..5bcca92 100644
  }
  
  // jsonUnescapeString 对双重JSON编码的字符串做unescape
-@@ -264,4 +257,3 @@ func extractFileName(s string) string {
+@@ -264,4 +259,3 @@ func extractFileName(s string) string {
  	}
  	return s
  }
 -
+diff --git a/onebot/local_runtime_test.go b/onebot/local_runtime_test.go
+new file mode 100644
+index 0000000..3c70a4a
+--- /dev/null
++++ b/onebot/local_runtime_test.go
+@@ -0,0 +1,48 @@
++package main
++
++import (
++	"context"
++	"errors"
++	"net/http"
++	"net/http/httptest"
++	"testing"
++	"time"
++)
++
++func TestLateResponseCannotCompleteAnotherSend(t *testing.T) {
++	replies := make(chan *Buf2RespData, 2)
++	replies <- &Buf2RespData{TaskID: 10}
++	expected := errors.New("current request failed")
++	replies <- &Buf2RespData{TaskID: 11, Err: expected}
++	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
++	defer cancel()
++	if got := waitForSendResponse(ctx, 11, replies); got != expected {
++		t.Fatalf("got %v", got)
++	}
++}
++
++func TestUnparseableResponseIsNotSuccess(t *testing.T) {
++	HandleBuf2Resp(17, "text", []byte{0xff})
++	result := <-buf2RespChan
++	if result.Err == nil || result.TaskID != 17 {
++		t.Fatalf("unexpected result: %+v", result)
++	}
++}
++
++func TestLocalStatusRequiresTokenAndReportsAbsentSession(t *testing.T) {
++	handler := newHTTPHandler("test-secret", nil, nil)
++	for _, authorized := range []bool{false, true} {
++		req := httptest.NewRequest(http.MethodGet, "/local_status", nil)
++		if authorized {
++			req.Header.Set("Authorization", "Bearer test-secret")
++		}
++		result := httptest.NewRecorder()
++		handler.ServeHTTP(result, req)
++		if !authorized && result.Code != 401 {
++			t.Fatal(result.Code)
++		}
++		if authorized && (result.Code != 200 || result.Body.String() != "{\"hook_verified\":false,\"login_verified\":false}\n") {
++			t.Fatal(result.Body.String())
++		}
++	}
++}
+diff --git a/onebot/logger.go b/onebot/logger.go
+index f10835b..1e73ff8 100644
+--- a/onebot/logger.go
++++ b/onebot/logger.go
+@@ -5,9 +5,10 @@ import (
+ 	"fmt"
+ 	"log"
+ 	"os"
++	"path/filepath"
+ 	"runtime"
+ 	"strings"
+-	
++
+ 	"github.com/mgutz/ansi"
+ 	"github.com/rs/zerolog"
+ 	"gopkg.in/natefinch/lumberjack.v2"
+@@ -38,18 +39,18 @@ func initLogger() {
+ 		MaxAge:     30,
+ 		Compress:   false,
+ 	}
+-	
++
+ 	stdoutWriter := zerolog.ConsoleWriter{
+ 		Out:         os.Stdout,
+ 		TimeFormat:  "2006-01-02 15:04:05",
+ 		FormatLevel: Logger.ColorFormatLevel,
+ 	}
+-	
++
+ 	Logger.logger = zerolog.New(zerolog.MultiLevelWriter(fileWriter, stdoutWriter)).With().
+ 		Timestamp().
+ 		Logger()
+ 	QQLogger.logger = Logger.logger
+-	
++
+ 	log.SetOutput(Logger.logger)
+ 	log.SetFlags(0)
+ 	// set log level
+@@ -69,65 +70,65 @@ func initLogger() {
+ 
+ func getCallerFile() string {
+ 	_, filename, line, _ := runtime.Caller(2)
+-	return fmt.Sprintf("%s:%d", filename, line)
++	return fmt.Sprintf("%s:%d", filepath.Base(filename), line)
+ }
+ 
+ func DebugCtx(ctx context.Context, msg string, fields ...interface{}) {
+ 	callerFile := getCallerFile()
+-	Logger.logger.Debug().Fields(fields).Msg(callerFile + " " + msg)
++	Logger.logger.Debug().Fields(safeLogFields(fields)).Msg(callerFile + " " + msg)
+ }
+ 
+ // InfoCtx info log
+ func InfoCtx(ctx context.Context, msg string, fields ...interface{}) {
+ 	callerFile := getCallerFile()
+-	Logger.logger.Info().Fields(fields).Msg(callerFile + " " + msg)
++	Logger.logger.Info().Fields(safeLogFields(fields)).Msg(callerFile + " " + msg)
+ }
+ 
+ // WarnCtx log
+ func WarnCtx(ctx context.Context, msg string, fields ...interface{}) {
+ 	callerFile := getCallerFile()
+-	Logger.logger.Warn().Fields(fields).Msg(callerFile + " " + msg)
++	Logger.logger.Warn().Fields(safeLogFields(fields)).Msg(callerFile + " " + msg)
+ }
+ 
+ // ErrorCtx error log
+ func ErrorCtx(ctx context.Context, msg string, fields ...interface{}) {
+ 	callerFile := getCallerFile()
+-	Logger.logger.Error().Fields(fields).Msg(callerFile + " " + msg)
++	Logger.logger.Error().Fields(safeLogFields(fields)).Msg(callerFile + " " + msg)
+ }
+ 
+ // FatalCtx fatal log
+ func FatalCtx(ctx context.Context, msg string, fields ...interface{}) {
+ 	callerFile := getCallerFile()
+-	Logger.logger.Fatal().Fields(fields).Msg(callerFile + " " + msg)
++	Logger.logger.Fatal().Fields(safeLogFields(fields)).Msg(callerFile + " " + msg)
+ }
+ 
+ func Debug(msg string, fields ...interface{}) {
+ 	callerFile := getCallerFile()
+-	Logger.logger.Debug().Fields(fields).Msg(callerFile + " " + msg)
++	Logger.logger.Debug().Fields(safeLogFields(fields)).Msg(callerFile + " " + msg)
+ }
+ 
+ // Info info log
+ func Info(msg string, fields ...interface{}) {
+ 	callerFile := getCallerFile()
+-	Logger.logger.Info().Fields(fields).Msg(callerFile + " " + msg)
++	Logger.logger.Info().Fields(safeLogFields(fields)).Msg(callerFile + " " + msg)
+ }
+ 
+ // Warn log
+ func Warn(msg string, fields ...interface{}) {
+ 	callerFile := getCallerFile()
+-	Logger.logger.Warn().Fields(fields).Msg(callerFile + " " + msg)
++	Logger.logger.Warn().Fields(safeLogFields(fields)).Msg(callerFile + " " + msg)
+ }
+ 
+ // Error error log
+ func Error(msg string, fields ...interface{}) {
+ 	callerFile := getCallerFile()
+-	Logger.logger.Error().Fields(fields).Msg(callerFile + " " + msg)
++	Logger.logger.Error().Fields(safeLogFields(fields)).Msg(callerFile + " " + msg)
+ }
+ 
+ // Fatal fatal log
+ func Fatal(msg string, fields ...interface{}) {
+ 	callerFile := getCallerFile()
+-	Logger.logger.Fatal().Fields(fields).Msg(callerFile + " " + msg)
++	Logger.logger.Fatal().Fields(safeLogFields(fields)).Msg(callerFile + " " + msg)
+ }
+ 
+ func (l *LoggerInfo) ColorFormatLevel(i interface{}) string {
+@@ -149,3 +150,25 @@ func (l *LoggerInfo) ColorFormatLevel(i interface{}) string {
+ 		return ansi.Color(fmt.Sprintf("| %-5s |", "STD"), "white")
+ 	}
+ }
++
++// Only bounded, non-identifying metrics leave the logger. Raw JS payloads,
++// error strings, media keys, paths and IDs are deliberately excluded.
++func safeLogFields(fields []interface{}) []interface{} {
++	result := make([]interface{}, 0)
++	for i := 0; i+1 < len(fields); i += 2 {
++		key, ok := fields[i].(string)
++		if !ok {
++			continue
++		}
++		switch key {
++		case "bytes", "status", "size", "duration", "duration_ms", "data_len", "media_len", "chunks", "chunk", "times", "ret":
++			switch fields[i+1].(type) {
++			case int, int32, int64, uint, uint32, uint64, float64:
++				result = append(result, key, fields[i+1])
++			}
++		case "err":
++			result = append(result, "error_type", fmt.Sprintf("%T", fields[i+1]))
++		}
++	}
++	return result
++}
 diff --git a/onebot/main.go b/onebot/main.go
-index a72d50b..c2fb58c 100644
+index a72d50b..2fbb9ff 100644
 --- a/onebot/main.go
 +++ b/onebot/main.go
-@@ -6,7 +6,6 @@ import (
+@@ -5,8 +5,6 @@ import (
+ 	"encoding/json"
  	"flag"
  	"fmt"
- 	"net/http"
+-	"net/http"
 -	_ "net/http/pprof"
  	"os"
  	"os/signal"
  	"runtime/debug"
-@@ -20,6 +19,10 @@ import (
+@@ -20,6 +18,18 @@ import (
  
  func main() {
  	initFlag()
++	if config.FridaType == "gadget" {
++		var err error
++		config.GadgetToken, err = readGadgetToken(os.Getenv("WECHAT_GADGET_TOKEN_FILE"))
++		if err != nil {
++			fmt.Fprintln(os.Stderr, err)
++			os.Exit(2)
++		}
++	}
 +	if config.OnebotToken == "" {
 +		fmt.Fprintln(os.Stderr, "OneBot token required: set WECHAT_ONEBOT_TOKEN or pass -token")
 +		os.Exit(2)
@@ -62,7 +346,7 @@ index a72d50b..c2fb58c 100644
  	initLogger()
  	if config.FridaType == "gadget" {
  		initFridaGadget()
-@@ -29,26 +32,22 @@ func main() {
+@@ -29,26 +39,22 @@ func main() {
  	go SendWorker()
  	go cleanExpiredDownloads()
  
@@ -91,20 +375,22 @@ index a72d50b..c2fb58c 100644
  	// 3. 启动服务
  	Info("HTTP 服务启动在", "host", config.ReceiveHost)
 -	if err := http.ListenAndServe(config.ReceiveHost, nil); err != nil {
-+	if err := http.ListenAndServe(config.ReceiveHost, handler); err != nil {
++	if err := newHTTPServer(config.ReceiveHost, handler).ListenAndServe(); err != nil {
  		Error("服务启动失败", "err", err)
  	}
  
-@@ -59,7 +58,7 @@ func initFlag() {
+@@ -59,7 +65,9 @@ func initFlag() {
  	flag.StringVar(&config.SendURL, "send_url", "http://127.0.0.1:36060/onebot", "发送消息的 URL: http://127.0.0.1:36060/onebot")
  	flag.StringVar(&config.ReceiveHost, "receive_host", "127.0.0.1:58080", "接收消息的地址: 127.0.0.1:58080")
  	flag.StringVar(&config.FridaGadgetAddr, "gadget_addr", "127.0.0.1:27042", "Gadget 地址: 127.0.0.1:27042 仅当 type 为 gadget 时有效")
 -	flag.StringVar(&config.OnebotToken, "token", "MuseBot", "OneBot Token: MuseBot")
 +	flag.StringVar(&config.OnebotToken, "token", "", "OneBot token (or set WECHAT_ONEBOT_TOKEN)")
++	flag.StringVar(&config.HookScript, "hook_script", "./script.js", "Pinned hook script for the exact build")
++	flag.BoolVar(&config.ReceiveOnly, "receive_only", false, "Disable legacy network sends; use the separate native text sender")
  	flag.StringVar(&config.ImagePath, "image_path", "", "图片路径: /Users/xxx/Library/Containers/com.tencent.xinWeChat/Data/Documents/xwechat_files/xxx/temp/xxx/2026-01/Img/")
  	flag.StringVar(&config.WechatConf, "wechat_conf", "../wechat_version/4_1_11_53_mac.json", "微信配置文件路径: ../wechat_version/4_1_6_12_mac.json")
  	flag.StringVar(&config.ConnType, "conn_type", "http", "连接类型: http | websocket")
-@@ -68,6 +67,9 @@ func initFlag() {
+@@ -68,6 +76,9 @@ func initFlag() {
  	flag.StringVar(&logLevel, "log_level", "info", "log level")
  
  	flag.Parse()
@@ -114,15 +400,29 @@ index a72d50b..c2fb58c 100644
  
  	if myWechatId == "" && config.ImagePath != "" {
  		if idx := strings.Index(config.ImagePath, "xwechat_files/"); idx != -1 {
-@@ -86,7 +88,6 @@ func initFlag() {
+@@ -86,9 +97,6 @@ func initFlag() {
  	fmt.Println("SendURL", config.SendURL)
  	fmt.Println("ReceiveHost", config.ReceiveHost)
  	fmt.Println("FridaGadgetAddr", config.FridaGadgetAddr)
 -	fmt.Println("OnebotToken", config.OnebotToken)
- 	fmt.Println("ImagePath", config.ImagePath)
- 	fmt.Println("WechatConf", config.WechatConf)
+-	fmt.Println("ImagePath", config.ImagePath)
+-	fmt.Println("WechatConf", config.WechatConf)
  	fmt.Println("ConnType", config.ConnType)
-@@ -111,6 +112,14 @@ func initFridaGadget() {
+ 	fmt.Println("SendInterval", config.SendInterval)
+ 	fmt.Println("WechatPid", config.WechatPid)
+@@ -99,7 +107,10 @@ func initFridaGadget() {
+ 	var err error
+ 	mgr := frida.NewDeviceManager()
+ 	// 连接到 Gadget 默认端口
+-	device, err = mgr.AddRemoteDevice(config.FridaGadgetAddr, frida.NewRemoteDeviceOptions())
++	options := frida.NewRemoteDeviceOptions()
++	options.SetToken(config.GadgetToken)
++	defer options.Clean()
++	device, err = mgr.AddRemoteDevice(config.FridaGadgetAddr, options)
+ 	if err != nil {
+ 		Fatal("❌ 无法连接 Gadget", err)
+ 	}
+@@ -111,6 +122,14 @@ func initFridaGadget() {
  
  	loadJs()
  
@@ -137,7 +437,16 @@ index a72d50b..c2fb58c 100644
  }
  
  func initFrida() {
-@@ -235,7 +244,8 @@ func loadJs() {
+@@ -167,7 +186,7 @@ func loadJs() {
+ 		Fatal("解析 JSON 失败", "err", err)
+ 	}
+ 
+-	codeTemplate, err := os.ReadFile("./script.js")
++	codeTemplate, err := os.ReadFile(config.HookScript)
+ 	if err != nil {
+ 		Fatal("读取脚本失败", "err", err)
+ 	}
+@@ -235,7 +254,8 @@ func loadJs() {
  												rawBytes[i] = byte(int(f))
  											}
  										}
@@ -148,7 +457,7 @@ index a72d50b..c2fb58c 100644
  								}
  							}()
 diff --git a/onebot/param.go b/onebot/param.go
-index 9520047..8983936 100644
+index 9520047..8af1604 100644
 --- a/onebot/param.go
 +++ b/onebot/param.go
 @@ -102,6 +102,7 @@ type VideoInfo struct {
@@ -159,6 +468,16 @@ index 9520047..8983936 100644
  	MsgType string
  	Data    []byte
  	Err     error
+@@ -134,6 +135,9 @@ type Config struct {
+ 	SendURL         string `json:"send_url"`
+ 	ReceiveHost     string `json:"receive_host"`
+ 	FridaGadgetAddr string `json:"frida_gadget_addr"`
++	GadgetToken     string `json:"-"`
++	HookScript      string `json:"-"`
++	ReceiveOnly     bool   `json:"-"`
+ 	OnebotToken     string `json:"onebot_token"`
+ 	ImagePath       string `json:"image_path"`
+ 	ConnType        string `json:"conn_type"`
 diff --git a/onebot/resp_parser.go b/onebot/resp_parser.go
 index 23372ab..6874e80 100644
 --- a/onebot/resp_parser.go
@@ -238,237 +557,237 @@ index 980f858..2df81f3 100644
  						data: Array.from(bytes),
  					});
  				}
-diff --git a/onebot/websocket.go b/onebot/websocket.go
-index e26a806..13c2a7e 100644
---- a/onebot/websocket.go
-+++ b/onebot/websocket.go
-@@ -3,12 +3,11 @@ package main
- import (
- 	"encoding/json"
- 	"fmt"
--	"io"
- 	"net/http"
- 	"runtime/debug"
- 	"strings"
- 	"time"
--	
+diff --git a/onebot/security_test.go b/onebot/security_test.go
+new file mode 100644
+index 0000000..f3b10f1
+--- /dev/null
++++ b/onebot/security_test.go
+@@ -0,0 +1,145 @@
++package main
 +
- 	"github.com/gorilla/websocket"
- )
- 
-@@ -35,7 +34,7 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
- 		return
- 	}
- 	defer conn.Close()
--	
++import (
++	"bytes"
++	"errors"
++	"io"
++	"net"
++	"net/http"
++	"net/http/httptest"
++	"os"
++	"path/filepath"
++	"strings"
++	"testing"
++	"time"
 +
- 	for {
- 		m := new(OneBotWSMsg)
- 		_, msgByte, err := conn.ReadMessage()
-@@ -43,14 +42,14 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
- 			Error("读取失败", "err", err)
- 			break
- 		}
--		
--		Info("收到消息", "msg", string(msgByte))
++	"github.com/gorilla/websocket"
++	"github.com/rs/zerolog"
++)
 +
-+		Info("收到消息", "bytes", len(msgByte))
- 		err = json.Unmarshal(msgByte, m)
- 		if err != nil {
- 			Error("解析失败", "err", err)
- 			continue
- 		}
--		
-+
- 		switch m.Action {
- 		case "get_login_info":
- 			err = conn.WriteJSON(map[string]any{
-@@ -84,11 +83,11 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
- 				Error("发送失败", "err", err)
- 				break
- 			}
--			
-+
- 		}
--		
-+
- 	}
--	
-+
- }
- 
- func SendWebSocketMsg(jsonData []byte) {
-@@ -97,14 +96,14 @@ func SendWebSocketMsg(jsonData []byte) {
- 			Error("ws panic", "err", r, "stack", string(debug.Stack()))
- 		}
- 	}()
--	
-+
- 	if conn == nil {
- 		Error("连接为空")
- 		return
- 	}
--	
-+
- 	time.Sleep(time.Duration(config.SendInterval) * time.Millisecond)
--	
-+
- 	jsonReq, err := HandleMsg(jsonData)
- 	if err != nil {
- 		Error("JSON 序列化失败", "err", err)
-@@ -113,8 +112,8 @@ func SendWebSocketMsg(jsonData []byte) {
- 	if jsonReq == nil {
- 		return
- 	}
--	
--	Info("发送数据", "msg", string(jsonReq))
-+
-+	Info("发送数据", "bytes", len(jsonReq))
- 	err = conn.WriteMessage(websocket.TextMessage, jsonReq)
- 	if err != nil {
- 		Error("发送消息失败", "err", err)
-@@ -139,7 +138,7 @@ func SendWS(req *WSParams) error {
- 			Error("JSON 反序列化失败", "err", err)
- 			return err
- 		}
--		
-+
- 		for _, v := range msgs {
- 			if v.Type == "text" {
- 				sendContent += v.Data.Text
-@@ -150,7 +149,7 @@ func SendWS(req *WSParams) error {
- 						atUserID += v.Data.QQ + ","
- 					}
- 				}
--				
-+
- 			} else if v.Type == "image" || v.Type == "video" {
- 				msgChan <- &SendMsg{
- 					UserId:  req.UserID,
-@@ -161,7 +160,7 @@ func SendWS(req *WSParams) error {
- 			}
- 		}
- 	}
--	
-+
- 	if sendContent != "" {
- 		msgChan <- &SendMsg{
- 			UserId:  req.UserID,
-@@ -171,20 +170,6 @@ func SendWS(req *WSParams) error {
- 			AtUser:  strings.TrimRight(atUserID, ","),
- 		}
- 	}
--	
--	return nil
--}
- 
--func testWebSocket(w http.ResponseWriter, r *http.Request) {
--	jsonData, err := io.ReadAll(r.Body)
--	if err != nil {
--		Error("读取消息失败", "err", err)
--		return
--	}
--	
--	err = conn.WriteMessage(websocket.TextMessage, jsonData)
--	if err != nil {
--		Error("发送消息失败", "err", err)
--		return
--	}
-+	return nil
- }
-diff --git a/onebot/worker.go b/onebot/worker.go
-index 107e859..90b2ab4 100644
---- a/onebot/worker.go
-+++ b/onebot/worker.go
-@@ -319,17 +319,21 @@ func SendWechatMsg(m *SendMsg) {
- 		}
- 	}
- 
--	select {
--	case <-ctx.Done():
--		Error("任务执行超时！", "taskId", currTaskId)
--		sendErr = errors.New("send timeout")
--	case resp := <-buf2RespChan:
--		if resp.Err != nil {
--			Error("收到buf2resp失败信号", "taskId", currTaskId, "msg_type", resp.MsgType, "err", resp.Err)
--			sendErr = resp.Err
--			return
-+	sendErr = waitForSendResponse(ctx, currTaskId, buf2RespChan)
++func TestSendRejectsOversizeAndMalformedBeforeEnqueue(t *testing.T) {
++	valid := `{"user_id":"filehelper","message":[{"type":"text","data":{"text":"fixture"}}]}`
++	for _, tc := range []struct {
++		body   string
++		status int
++	}{
++		{valid + strings.Repeat(" ", maxMessageBytes), 413},
++		{`{"message":"` + strings.Repeat("x", maxMessageBytes) + `"}`, 413},
++		{valid + `{}`, 400},
++		{`{"user_id":"filehelper","message":[null]}`, 400},
++		{`{"user_id":"filehelper","message":[{"type":"text","data":null}]}`, 400},
++	} {
++		req := httptest.NewRequest("POST", "/send_private_msg", strings.NewReader(tc.body))
++		req.ContentLength = -1 // Chunked bodies must be limited too.
++		req.Header.Set("Authorization", "Bearer test")
++		response := httptest.NewRecorder()
++		newHTTPHandler("test", sendHandler, handleWebSocket).ServeHTTP(response, req)
++		if response.Code != tc.status {
++			t.Fatalf("got %d want %d", response.Code, tc.status)
++		}
++	}
++	request := new(SendRequest)
++	if !decodeSendRequest(httptest.NewRecorder(), httptest.NewRequest("POST", "/", strings.NewReader(valid)), request) || request.UserID != "filehelper" {
++		t.Fatal("valid request rejected")
++	}
 +}
 +
-+// Ignore a late acknowledgement belonging to a previously timed-out request.
-+func waitForSendResponse(ctx context.Context, taskID int64, replies <-chan *Buf2RespData) error {
-+	for {
-+		select {
-+		case <-ctx.Done():
-+			return errors.New("send timeout")
-+		case resp := <-replies:
-+			if resp.TaskID != taskID {
-+				continue
-+			}
-+			return resp.Err
- 		}
--		Info("收到buf2resp完成信号，任务完成", "taskId", currTaskId, "msg_type", resp.MsgType, "data_len", len(resp.Data))
- 	}
- }
- 
-@@ -506,12 +510,12 @@ func GetDownloadPath(cdnUrl, aesKeyStr, extHint string, totalLen int) (string, e
- }
- 
- // HandleBuf2Resp 处理所有消息类型的buf2resp响应
--func HandleBuf2Resp(msgType string, data []byte) {
-+func HandleBuf2Resp(taskID int64, msgType string, data []byte) {
- 	Info("收到buf2resp响应", "msg_type", msgType, "data_len", len(data))
- 
- 	if len(data) == 0 {
- 		Error("buf2resp响应数据为空", "msg_type", msgType)
--		buf2RespChan <- &Buf2RespData{
-+		buf2RespChan <- &Buf2RespData{TaskID: taskID,
- 			MsgType: msgType,
- 			Data:    data,
- 			Err:     errors.New("response data is empty"),
-@@ -528,13 +532,14 @@ func HandleBuf2Resp(msgType string, data []byte) {
- 
- 	ret, errMsg, err := ParseSendMsgResponse(data)
- 	if err != nil {
--		Info("buf2resp响应无法提取错误码，视为成功", "msg_type", msgType, "err", err)
-+		buf2RespChan <- &Buf2RespData{TaskID: taskID, MsgType: msgType, Data: data, Err: fmt.Errorf("unparseable response: %w", err)}
-+		return
- 	}
- 
- 	// 判断错误码是否为0
- 	if ret != 0 {
- 		Error("buf2resp响应错误", "msg_type", msgType, "ret", ret, "errMsg", errMsg)
--		buf2RespChan <- &Buf2RespData{
-+		buf2RespChan <- &Buf2RespData{TaskID: taskID,
- 			MsgType: msgType,
- 			Data:    data,
- 			Err:     fmt.Errorf("response error, ret=%d, errMsg=%s", ret, errMsg),
-@@ -543,7 +548,7 @@ func HandleBuf2Resp(msgType string, data []byte) {
- 	}
- 
- 	Info("buf2resp响应成功", "msg_type", msgType)
--	buf2RespChan <- &Buf2RespData{
-+	buf2RespChan <- &Buf2RespData{TaskID: taskID,
- 		MsgType: msgType,
- 		Data:    data,
- 	}
++func TestSlowHTTPHeaderIsClosed(t *testing.T) {
++	server := newHTTPServer("", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { t.Error("incomplete request reached handler") }))
++	if server.ReadHeaderTimeout <= 0 || server.ReadTimeout <= 0 || server.WriteTimeout < 60*time.Second || server.IdleTimeout <= 0 || server.MaxHeaderBytes > 32768 {
++		t.Fatal("missing or unsuitable production limits")
++	}
++	server.ReadHeaderTimeout = 40 * time.Millisecond
++	listener, err := net.Listen("tcp", "127.0.0.1:0")
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer server.Close()
++	go server.Serve(listener)
++	conn, err := net.Dial("tcp", listener.Addr().String())
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer conn.Close()
++	conn.SetDeadline(time.Now().Add(time.Second))
++	io.WriteString(conn, "GET / HTTP/1.1\r\nHost: test\r\nX-Slow:")
++	_, err = io.ReadAll(conn)
++	if nerr, ok := err.(net.Error); ok && nerr.Timeout() {
++		t.Fatal("slow header connection stayed open")
++	}
++}
++
++func TestWebsocketLimitsAndMissingParams(t *testing.T) {
++	server := httptest.NewServer(newHTTPHandler("test", sendHandler, handleWebSocket))
++	defer server.Close()
++	conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http")+"/ws", http.Header{"Authorization": {"Bearer test"}})
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer conn.Close()
++	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
++	if err := conn.WriteMessage(websocket.TextMessage, []byte(`{"action":"send_private_msg"}`)); err != nil {
++		t.Fatal(err)
++	}
++	_, response, err := conn.ReadMessage()
++	if err != nil || !bytes.Contains(response, []byte("params required")) {
++		t.Fatalf("missing params: %v", err)
++	}
++	conn.WriteMessage(websocket.TextMessage, bytes.Repeat([]byte("x"), maxMessageBytes+1))
++	_, _, err = conn.ReadMessage()
++	if !websocket.IsCloseError(err, websocket.CloseMessageTooBig) {
++		t.Fatalf("oversized websocket not rejected: %v", err)
++	}
++}
++
++func TestPrivateGadgetTokenRequired(t *testing.T) {
++	path := filepath.Join(t.TempDir(), "gadget.token")
++	for _, value := range []string{"", "short", strings.Repeat("x", 129)} {
++		os.WriteFile(path, []byte(value), 0600)
++		if _, err := readGadgetToken(path); err == nil {
++			t.Fatal("invalid credential accepted")
++		}
++	}
++	secret := strings.Repeat("a", 64)
++	os.WriteFile(path, []byte(secret+"\n"), 0600)
++	if token, err := readGadgetToken(path); err != nil || token != secret {
++		t.Fatal("valid credential rejected")
++	}
++	os.Chmod(path, 0644)
++	if _, err := readGadgetToken(path); err == nil {
++		t.Fatal("public credential accepted")
++	}
++	os.Chmod(path, 0600)
++	link := path + "-link"
++	os.Symlink(path, link)
++	if _, err := readGadgetToken(link); err == nil {
++		t.Fatal("symlink accepted")
++	}
++}
++
++func TestLogsExcludePrivateFields(t *testing.T) {
++	var output bytes.Buffer
++	previous := Logger.logger
++	defer func() { Logger.logger = previous }()
++	Logger.logger = zerolog.New(&output)
++	private := "private-fixture-secret"
++	Info("fixture", "target_id", private, "aes_key", private, "payload", private, "path", private, "bytes", 42)
++	Error("fixture failure", "err", errors.New(private), "stack", private)
++	if strings.Contains(output.String(), private) || !strings.Contains(output.String(), `"bytes":42`) {
++		t.Fatal("logger leaked private fields or dropped safe metric")
++	}
++}
++
++func TestReceiveOnlyNeverEnqueuesLegacySend(t *testing.T) {
++	old := config.ReceiveOnly
++	config.ReceiveOnly = true
++	defer func() { config.ReceiveOnly = old }()
++	response := httptest.NewRecorder()
++	sendHandler(response, httptest.NewRequest("POST", "/send_private_msg", strings.NewReader(`{"user_id":"filehelper","message":[{"type":"text","data":{"text":"fixture"}}]}`)))
++	if response.Code != http.StatusNotImplemented {
++		t.Fatal("legacy HTTP send was not disabled")
++	}
++	if SendWS(&WSParams{UserID: "filehelper", Message: "fixture"}) == nil {
++		t.Fatal("legacy WS send was not disabled")
++	}
++}
 diff --git a/onebot/server.go b/onebot/server.go
 new file mode 100644
-index 0000000..f56d782
+index 0000000..cf87cab
 --- /dev/null
 +++ b/onebot/server.go
-@@ -0,0 +1,57 @@
+@@ -0,0 +1,121 @@
 +package main
 +
 +import (
 +	"context"
 +	"crypto/hmac"
 +	"encoding/json"
++	"errors"
++	"io"
 +	"net/http"
++	"os"
++	"regexp"
 +	"strings"
++	"syscall"
 +	"time"
 +)
++
++const maxMessageBytes = 2 << 20
++
++func readGadgetToken(path string) (string, error) {
++	invalid := errors.New("private Gadget token file required (owned regular file, mode 0600)")
++	fd, err := syscall.Open(path, syscall.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
++	if err != nil {
++		return "", invalid
++	}
++	file := os.NewFile(uintptr(fd), "gadget-token")
++	defer file.Close()
++	info, err := file.Stat()
++	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0077 != 0 {
++		return "", invalid
++	}
++	owner, ok := info.Sys().(*syscall.Stat_t)
++	if !ok || int(owner.Uid) != os.Getuid() {
++		return "", invalid
++	}
++	data, err := io.ReadAll(io.LimitReader(file, 257))
++	token := strings.TrimSpace(string(data))
++	if err != nil || !regexp.MustCompile(`^[A-Za-z0-9_-]{43,128}$`).MatchString(token) {
++		return "", invalid
++	}
++	return token, nil
++}
++
++func newHTTPServer(address string, handler http.Handler) *http.Server {
++	return &http.Server{Addr: address, Handler: handler, ReadHeaderTimeout: 5 * time.Second,
++		ReadTimeout: 15 * time.Second, WriteTimeout: 90 * time.Second, IdleTimeout: 60 * time.Second,
++		MaxHeaderBytes: 16 << 10}
++}
++
++func decodeSendRequest(w http.ResponseWriter, r *http.Request, request *SendRequest) bool {
++	r.Body = http.MaxBytesReader(w, r.Body, maxMessageBytes)
++	// Read through EOF before enqueueing: a valid JSON prefix followed by an
++	// oversized tail must not start a send before it is rejected.
++	data, err := io.ReadAll(r.Body)
++	if err != nil {
++		var oversized *http.MaxBytesError
++		if errors.As(err, &oversized) {
++			http.Error(w, "request too large", http.StatusRequestEntityTooLarge)
++		} else {
++			http.Error(w, "cannot read request", http.StatusBadRequest)
++		}
++		return false
++	}
++	if json.Unmarshal(data, request) != nil {
++		http.Error(w, "invalid JSON", http.StatusBadRequest)
++		return false
++	}
++	for _, message := range request.Message {
++		if message == nil || message.Data == nil {
++			http.Error(w, "null message data", http.StatusBadRequest)
++			return false
++		}
++	}
++	return true
++}
 +
 +// Keep authentication at the routing boundary, including the WebSocket
 +// handshake. A private mux prevents debug handlers registered on DefaultServeMux
@@ -623,57 +942,348 @@ index 0000000..fcde5e7
 +		}
 +	}
 +}
-diff --git a/onebot/local_runtime_test.go b/onebot/local_runtime_test.go
-new file mode 100644
-index 0000000..3c70a4a
---- /dev/null
-+++ b/onebot/local_runtime_test.go
-@@ -0,0 +1,48 @@
-+package main
+diff --git a/onebot/websocket.go b/onebot/websocket.go
+index e26a806..8f356ba 100644
+--- a/onebot/websocket.go
++++ b/onebot/websocket.go
+@@ -3,17 +3,40 @@ package main
+ import (
+ 	"encoding/json"
+ 	"fmt"
+-	"io"
+ 	"net/http"
+ 	"runtime/debug"
+ 	"strings"
++	"sync"
+ 	"time"
+-	
 +
-+import (
-+	"context"
-+	"errors"
-+	"net/http"
-+	"net/http/httptest"
-+	"testing"
-+	"time"
-+)
+ 	"github.com/gorilla/websocket"
+ )
+ 
+-var upgrader = websocket.Upgrader{}
+-var conn *websocket.Conn
++var upgrader = websocket.Upgrader{HandshakeTimeout: 5 * time.Second}
++var peerMu sync.RWMutex
++var activePeer *websocketPeer
 +
-+func TestLateResponseCannotCompleteAnotherSend(t *testing.T) {
-+	replies := make(chan *Buf2RespData, 2)
-+	replies <- &Buf2RespData{TaskID: 10}
-+	expected := errors.New("current request failed")
-+	replies <- &Buf2RespData{TaskID: 11, Err: expected}
-+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-+	defer cancel()
-+	if got := waitForSendResponse(ctx, 11, replies); got != expected {
-+		t.Fatalf("got %v", got)
-+	}
++type websocketPeer struct {
++	conn    *websocket.Conn
++	writeMu sync.Mutex
 +}
 +
-+func TestUnparseableResponseIsNotSuccess(t *testing.T) {
-+	HandleBuf2Resp(17, "text", []byte{0xff})
-+	result := <-buf2RespChan
-+	if result.Err == nil || result.TaskID != 17 {
-+		t.Fatalf("unexpected result: %+v", result)
++func (p *websocketPeer) write(kind int, data []byte) error {
++	p.writeMu.Lock()
++	defer p.writeMu.Unlock()
++	if err := p.conn.SetWriteDeadline(time.Now().Add(10 * time.Second)); err != nil {
++		return err
 +	}
++	return p.conn.WriteMessage(kind, data)
 +}
 +
-+func TestLocalStatusRequiresTokenAndReportsAbsentSession(t *testing.T) {
-+	handler := newHTTPHandler("test-secret", nil, nil)
-+	for _, authorized := range []bool{false, true} {
-+		req := httptest.NewRequest(http.MethodGet, "/local_status", nil)
-+		if authorized {
-+			req.Header.Set("Authorization", "Bearer test-secret")
-+		}
-+		result := httptest.NewRecorder()
-+		handler.ServeHTTP(result, req)
-+		if !authorized && result.Code != 401 {
-+			t.Fatal(result.Code)
-+		}
-+		if authorized && (result.Code != 200 || result.Body.String() != "{\"hook_verified\":false,\"login_verified\":false}\n") {
-+			t.Fatal(result.Body.String())
-+		}
++func (p *websocketPeer) writeJSON(value interface{}) error {
++	data, err := json.Marshal(value)
++	if err != nil {
++		return err
 +	}
++	return p.write(websocket.TextMessage, data)
 +}
+ 
+ type OneBotWSMsg struct {
+ 	Action string    `json:"action"`
+@@ -28,14 +51,48 @@ type WSParams struct {
+ }
+ 
+ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
+-	var err error
+-	conn, err = upgrader.Upgrade(w, r, nil)
++	conn, err := upgrader.Upgrade(w, r, nil)
+ 	if err != nil {
+ 		Error("升级失败", "err", err)
+ 		return
+ 	}
+ 	defer conn.Close()
+-	
++	conn.SetReadLimit(maxMessageBytes)
++	conn.SetReadDeadline(time.Now().Add(60 * time.Second))
++	conn.SetPongHandler(func(string) error { return conn.SetReadDeadline(time.Now().Add(60 * time.Second)) })
++	peer := &websocketPeer{conn: conn}
++	peerMu.Lock()
++	previous := activePeer
++	activePeer = peer
++	peerMu.Unlock()
++	if previous != nil {
++		previous.conn.Close()
++	}
++	done := make(chan struct{})
++	defer func() {
++		close(done)
++		peerMu.Lock()
++		if activePeer == peer {
++			activePeer = nil
++		}
++		peerMu.Unlock()
++	}()
++	go func() {
++		ticker := time.NewTicker(25 * time.Second)
++		defer ticker.Stop()
++		for {
++			select {
++			case <-done:
++				return
++			case <-ticker.C:
++				if peer.write(websocket.PingMessage, nil) != nil {
++					conn.Close()
++					return
++				}
++			}
++		}
++	}()
++
+ 	for {
+ 		m := new(OneBotWSMsg)
+ 		_, msgByte, err := conn.ReadMessage()
+@@ -43,17 +100,24 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
+ 			Error("读取失败", "err", err)
+ 			break
+ 		}
+-		
+-		Info("收到消息", "msg", string(msgByte))
++		conn.SetReadDeadline(time.Now().Add(60 * time.Second))
++
++		Info("收到消息", "bytes", len(msgByte))
+ 		err = json.Unmarshal(msgByte, m)
+ 		if err != nil {
+ 			Error("解析失败", "err", err)
+ 			continue
+ 		}
+-		
++		if m.Params == nil && m.Action != "get_login_info" {
++			if peer.writeJSON(map[string]any{"status": "failed", "error": "params required"}) != nil {
++				return
++			}
++			continue
++		}
++
+ 		switch m.Action {
+ 		case "get_login_info":
+-			err = conn.WriteJSON(map[string]any{
++			err = peer.writeJSON(map[string]any{
+ 				"echo":   m.Echo,
+ 				"status": "ok",
+ 				"data": map[string]any{
+@@ -67,7 +131,7 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
+ 			}
+ 		case "get_group_member_info":
+ 			nickname, _ := userID2NicknameMap.Load(m.Params.GroupID + "_" + m.Params.UserID)
+-			err = conn.WriteJSON(map[string]any{
++			err = peer.writeJSON(map[string]any{
+ 				"echo":   m.Echo,
+ 				"status": "ok",
+ 				"data": map[string]any{
+@@ -84,11 +148,11 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
+ 				Error("发送失败", "err", err)
+ 				break
+ 			}
+-			
++
+ 		}
+-		
++
+ 	}
+-	
++
+ }
+ 
+ func SendWebSocketMsg(jsonData []byte) {
+@@ -97,14 +161,17 @@ func SendWebSocketMsg(jsonData []byte) {
+ 			Error("ws panic", "err", r, "stack", string(debug.Stack()))
+ 		}
+ 	}()
+-	
+-	if conn == nil {
++
++	peerMu.RLock()
++	peer := activePeer
++	peerMu.RUnlock()
++	if peer == nil {
+ 		Error("连接为空")
+ 		return
+ 	}
+-	
++
+ 	time.Sleep(time.Duration(config.SendInterval) * time.Millisecond)
+-	
++
+ 	jsonReq, err := HandleMsg(jsonData)
+ 	if err != nil {
+ 		Error("JSON 序列化失败", "err", err)
+@@ -113,9 +180,9 @@ func SendWebSocketMsg(jsonData []byte) {
+ 	if jsonReq == nil {
+ 		return
+ 	}
+-	
+-	Info("发送数据", "msg", string(jsonReq))
+-	err = conn.WriteMessage(websocket.TextMessage, jsonReq)
++
++	Info("发送数据", "bytes", len(jsonReq))
++	err = peer.write(websocket.TextMessage, jsonReq)
+ 	if err != nil {
+ 		Error("发送消息失败", "err", err)
+ 		return
+@@ -123,6 +190,12 @@ func SendWebSocketMsg(jsonData []byte) {
+ }
+ 
+ func SendWS(req *WSParams) error {
++	if config.ReceiveOnly {
++		return fmt.Errorf("use the MCP native text sender for this build")
++	}
++	if req == nil {
++		return fmt.Errorf("params required")
++	}
+ 	sendContent := ""
+ 	atUserID := ""
+ 	if msg, ok := req.Message.(string); ok {
+@@ -139,7 +212,12 @@ func SendWS(req *WSParams) error {
+ 			Error("JSON 反序列化失败", "err", err)
+ 			return err
+ 		}
+-		
++
++		for _, v := range msgs {
++			if v == nil || v.Data == nil {
++				return fmt.Errorf("null message data")
++			}
++		}
+ 		for _, v := range msgs {
+ 			if v.Type == "text" {
+ 				sendContent += v.Data.Text
+@@ -150,7 +228,7 @@ func SendWS(req *WSParams) error {
+ 						atUserID += v.Data.QQ + ","
+ 					}
+ 				}
+-				
++
+ 			} else if v.Type == "image" || v.Type == "video" {
+ 				msgChan <- &SendMsg{
+ 					UserId:  req.UserID,
+@@ -161,7 +239,7 @@ func SendWS(req *WSParams) error {
+ 			}
+ 		}
+ 	}
+-	
++
+ 	if sendContent != "" {
+ 		msgChan <- &SendMsg{
+ 			UserId:  req.UserID,
+@@ -171,20 +249,6 @@ func SendWS(req *WSParams) error {
+ 			AtUser:  strings.TrimRight(atUserID, ","),
+ 		}
+ 	}
+-	
+-	return nil
+-}
+ 
+-func testWebSocket(w http.ResponseWriter, r *http.Request) {
+-	jsonData, err := io.ReadAll(r.Body)
+-	if err != nil {
+-		Error("读取消息失败", "err", err)
+-		return
+-	}
+-	
+-	err = conn.WriteMessage(websocket.TextMessage, jsonData)
+-	if err != nil {
+-		Error("发送消息失败", "err", err)
+-		return
+-	}
++	return nil
+ }
+diff --git a/onebot/worker.go b/onebot/worker.go
+index 107e859..97988a3 100644
+--- a/onebot/worker.go
++++ b/onebot/worker.go
+@@ -319,17 +319,21 @@ func SendWechatMsg(m *SendMsg) {
+ 		}
+ 	}
+ 
+-	select {
+-	case <-ctx.Done():
+-		Error("任务执行超时！", "taskId", currTaskId)
+-		sendErr = errors.New("send timeout")
+-	case resp := <-buf2RespChan:
+-		if resp.Err != nil {
+-			Error("收到buf2resp失败信号", "taskId", currTaskId, "msg_type", resp.MsgType, "err", resp.Err)
+-			sendErr = resp.Err
+-			return
++	sendErr = waitForSendResponse(ctx, currTaskId, buf2RespChan)
++}
++
++// Ignore a late acknowledgement belonging to a previously timed-out request.
++func waitForSendResponse(ctx context.Context, taskID int64, replies <-chan *Buf2RespData) error {
++	for {
++		select {
++		case <-ctx.Done():
++			return errors.New("send timeout")
++		case resp := <-replies:
++			if resp.TaskID != taskID {
++				continue
++			}
++			return resp.Err
+ 		}
+-		Info("收到buf2resp完成信号，任务完成", "taskId", currTaskId, "msg_type", resp.MsgType, "data_len", len(resp.Data))
+ 	}
+ }
+ 
+@@ -347,6 +351,11 @@ func HandleMsg(jsonData []byte) ([]byte, error) {
+ 	if m.GroupId != "" {
+ 		userID2NicknameMap.Store(m.GroupId+"_"+m.UserID, m.Sender.Nickname)
+ 	}
++	// The native text profile captures receive events only. Do not call the
++	// legacy media/download RPCs whose private ABI is not enabled for this build.
++	if config.ReceiveOnly {
++		return jsonData, nil
++	}
+ 
+ 	for _, msg := range m.Message {
+ 		switch msg.Type {
+@@ -506,12 +515,12 @@ func GetDownloadPath(cdnUrl, aesKeyStr, extHint string, totalLen int) (string, e
+ }
+ 
+ // HandleBuf2Resp 处理所有消息类型的buf2resp响应
+-func HandleBuf2Resp(msgType string, data []byte) {
++func HandleBuf2Resp(taskID int64, msgType string, data []byte) {
+ 	Info("收到buf2resp响应", "msg_type", msgType, "data_len", len(data))
+ 
+ 	if len(data) == 0 {
+ 		Error("buf2resp响应数据为空", "msg_type", msgType)
+-		buf2RespChan <- &Buf2RespData{
++		buf2RespChan <- &Buf2RespData{TaskID: taskID,
+ 			MsgType: msgType,
+ 			Data:    data,
+ 			Err:     errors.New("response data is empty"),
+@@ -528,13 +537,14 @@ func HandleBuf2Resp(msgType string, data []byte) {
+ 
+ 	ret, errMsg, err := ParseSendMsgResponse(data)
+ 	if err != nil {
+-		Info("buf2resp响应无法提取错误码，视为成功", "msg_type", msgType, "err", err)
++		buf2RespChan <- &Buf2RespData{TaskID: taskID, MsgType: msgType, Data: data, Err: fmt.Errorf("unparseable response: %w", err)}
++		return
+ 	}
+ 
+ 	// 判断错误码是否为0
+ 	if ret != 0 {
+ 		Error("buf2resp响应错误", "msg_type", msgType, "ret", ret, "errMsg", errMsg)
+-		buf2RespChan <- &Buf2RespData{
++		buf2RespChan <- &Buf2RespData{TaskID: taskID,
+ 			MsgType: msgType,
+ 			Data:    data,
+ 			Err:     fmt.Errorf("response error, ret=%d, errMsg=%s", ret, errMsg),
+@@ -543,7 +553,7 @@ func HandleBuf2Resp(msgType string, data []byte) {
+ 	}
+ 
+ 	Info("buf2resp响应成功", "msg_type", msgType)
+-	buf2RespChan <- &Buf2RespData{
++	buf2RespChan <- &Buf2RespData{TaskID: taskID,
+ 		MsgType: msgType,
+ 		Data:    data,
+ 	}

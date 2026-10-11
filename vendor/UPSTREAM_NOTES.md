@@ -99,3 +99,11 @@ git apply ../../patches/wechat_chatter-local-auth.patch
 - Python 缓存修复手机到文件传输助手的 chat_id，并迁移旧记录、保持原始数据和去重键。
 - 真实手机确认首条后台发送，真实 MCP 读取手机返回测试文本；后台服务安装与重连通过。
 - 当前补丁包括新增文件，反向 `git apply --reverse --check` 已通过。热重载卡住的观察及恢复步骤见验收记录。
+
+## 安全加固及新版适配候选
+
+- 构建脚本固定 Go 1.26.9；此前 Go 1.26.1 的构建记录仅为历史记录。
+- Gadget 通过私有凭据文件鉴权，Go 在附加前验证权限和格式；HTTP/WS 增加消息大小、超时和写入并发控制。
+- 日志采用数值指标白名单，移除原始错误、JS payload、媒体密钥和文件转储。
+- `-receive_only` 和 `-hook_script` 支持新版接收观察器；此模式拒绝旧 HTTP/WS 网络发送并跳过旧媒体处理 RPC。原生文本发送由 MCP helper 完成。
+- 新版的地址与布局存在项目 `native/` manifest，不向上游 JSON 填入猜测的媒体偏移。4.1.15.54 / 270134 目前仍待真实收发验收，见 [适配说明](../docs/wechat-4.1.15.md)。

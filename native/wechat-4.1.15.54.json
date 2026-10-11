@@ -1,0 +1,43 @@
+{
+  "version": "4.1.15.54",
+  "build": "270134",
+  "arch": "arm64",
+  "module_uuid": "8acf7a2f517c32b49dfb47e8849cd444",
+  "runtime_verified": false,
+  "offsets": {
+    "allocate": "0x713c030",
+    "release": "0x713c00c",
+    "taskCtor": "0x31c40",
+    "post": "0x4b6e2d8",
+    "paramCtor": "0x779d74",
+    "stringAssign": "0x713b8e0",
+    "pairRelease": "0x127f68",
+    "nativeSubmit": "0x414c0bc",
+    "recordCopy": "0xf5571c",
+    "flagVtable": "0x9c04428"
+  },
+  "layout": {
+    "allocation": 1552,
+    "recipient": 144,
+    "text": 1480,
+    "messageKey": 1408,
+    "type": 224,
+    "subtype": 228,
+    "recordMessageKey": 608
+  },
+  "receive_only": true,
+  "receiver_offset": "0x4655f5c",
+  "param_vtable": "0x9eae6a0",
+  "fingerprints": {
+    "allocate": "b04f01d010ba45f900021fd6b04f01d0",
+    "release": "b04f01d010ae45f900021fd6b04f01d0",
+    "taskCtor": "28008052080000b9018800a908000090",
+    "post": "ff4301d1f65702a9f44f03a9fd7b04a9",
+    "paramCtor": "ff0301d1f44f02a9fd7b03a9fdc30091",
+    "stringAssign": "b04f01f0108242f900021fd6b04f01f0",
+    "pairRelease": "f44fbea9fd7b01a9fd430091130440f9",
+    "nativeSubmit": "ff8305d1fa6711a9f85f12a9f65713a9",
+    "recordCopy": "f85fbca9f65701a9f44f02a9fd7b03a9"
+  },
+  "receiver_fingerprint": "3c008052e0c30091bf030094e0230191"
+}

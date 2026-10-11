@@ -18,11 +18,18 @@ remove local evidence before creating a public archive. The tracked patch
 reduces request and response logging to byte counts, but it cannot protect
 data already captured by an older runtime.
 
-Frida Gadget currently listens on `127.0.0.1:27042` without connection
-authentication. A local process that can connect may instrument WeChat without
-the OneBot token. Loopback binding does not isolate local users or applications.
-Do not forward this port. Gadget authentication must be configured together
-with both the OneBot and native-send clients before this boundary is hardened.
+Frida Gadget uses an independent random token on `127.0.0.1:27042`. The token
+file and the configuration inside the modified app must both be owner-only
+(`0600`); both clients reject missing credentials. Do not share the modified
+app bundle: it contains this private token. Existing installations require a
+coordinated app/client upgrade and a WeChat restart to enable authentication.
+Loopback binding and token authentication do not isolate root or processes
+that can read files as the same macOS user. Do not forward this port.
+
+The patch permits only selected numeric metrics and error types in structured
+logs, suppresses raw JS logs and media dumps, and limits HTTP/WS message sizes
+and network timeouts. Builds pin Go 1.26.9. See the current implementation,
+validation and deployment state in [security remediation](docs/security-remediation.md).
 
 MCP clients are trusted: any connected client can read the captured cache and
 invoke message sending. The server's instruction to send only user-authorized

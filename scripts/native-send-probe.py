@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Validate native queue/parameter construction without sending a message."""
 import frida
+from gadget_auth import connect
+from native_profile import load_profile, sender_code
 import json
 import plistlib
 import argparse
@@ -11,12 +13,9 @@ ROOT = Path(__file__).resolve().parents[1]
 parser=argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--send-test')
 options=parser.parse_args()
-info=plistlib.loads(Path('/Applications/WeChat.app/Contents/Info.plist').read_bytes())
-assert info['CFBundleShortVersionString']=='4.1.11' or info['CFBundleShortVersionString']=='4.1.11.53', info['CFBundleShortVersionString']
-assert str(info['CFBundleVersion'])=='269109', info['CFBundleVersion']
-s=frida.get_device_manager().add_remote_device('127.0.0.1:27042').attach('Gadget')
-manifest=json.loads((ROOT/'native/wechat-4.1.11.53.json').read_text())
-p=s.create_script('const EXPECTED_MODULE_UUID='+json.dumps(manifest['module_uuid'])+';\n'+(ROOT/'native/wechat_send.js').read_text())
+manifest,_=load_profile()
+s=connect(frida).attach('Gadget')
+p=s.create_script(sender_code(manifest))
 p.on('message',lambda m,d:print(json.dumps(m),flush=True))
 try:
     p.load()

@@ -16,6 +16,8 @@
 
 当前通过真实测试验收的是 Apple Silicon 上的微信 4.1.11.53 / Build 269109：文件传输助手的原生后台文本发送已确认能显示在电脑聊天窗口，并确认一条测试消息能在手机收到。普通联系人、群聊和媒体消息需要在各自环境中单独验收。
 
+微信 **4.1.15.54 / Build 270134** 已有独立适配候选和指令校验，尚待维护窗口完成真实收发验证，默认保持停用。进度及安装准备见 [新版适配说明](docs/wechat-4.1.15.md)；安全修复与部署状态见 [修复记录](docs/security-remediation.md)。
+
 ## 工作方式
 
 ```text
@@ -66,7 +68,7 @@ Intel Mac、Windows、Linux、微信 4.1.15.54 / Build 270134，以及其他未�
 
 ### 1. 安装工具并下载项目
 
-需要 Xcode Command Line Tools、Go 1.25+、Python 3.11+、`uv`、Git 和可用的网络连接。先安装 `uv`（例如 `brew install uv`），然后：
+需要 Xcode Command Line Tools、支持自动工具链下载的 Go、Python 3.11+、`uv`、Git 和可用的网络连接。构建固定使用 Go 1.26.9（自动下载到独立缓存）。先安装 `uv`（例如 `brew install uv`），然后：
 
 ```sh
 git clone https://github.com/<your-account>/wechat-local-mcp.git
@@ -87,7 +89,7 @@ cd wechat-local-mcp
 - 克隆并固定 `wechat_chatter` 的指定提交；
 - 应用本项目的鉴权和运行时补丁；
 - 下载并校验 Frida 17.8.0 macOS arm64 devkit；
-- 用本机 clang 编译 arm64 OneBot 二进制。
+- 用 Go 1.26.9 和本机 clang 编译 arm64 OneBot 二进制。
 
 上游源码和编译产物在 `vendor/`，均由 `.gitignore` 排除；公开仓库只保存固定提交说明、补丁和构建脚本。
 
@@ -162,7 +164,7 @@ MCP 名称是 `wechat-local`。文件传输助手使用 `chat_id="filehelper"`�
 - OneBot token 必须保存在本机权限为 `0600` 的文件中，不要放在命令行、截图、Issue 或 Git 提交里。
 - `/health` 需要 Bearer token，OneBot 回调 `/onebot` 使用原始正文 HMAC 签名；重复鉴权头会被拒绝。
 - 本地缓存和上游运行日志可能包含消息正文、会话 ID、媒体元数据和路径。分享诊断资料前先脱敏；旧日志不会因更新代码而自动清除。
-- Frida Gadget 目前仅监听 `127.0.0.1:27042`，但没有连接鉴权；本机其他进程可能绕过 OneBot token 操作微信。不要转发端口，详见 [安全说明](SECURITY.md)。
+- Frida Gadget 仅监听 `127.0.0.1:27042`，使用独立随机 token。准备脚本将 token 文件及应用配置设为 `0600`，两个客户端同步鉴权；不要转发端口或分享修改后的应用副本，详见 [安全说明](SECURITY.md)。旧安装需要完成维护窗口升级才能获得这些保护。
 - `.gitignore` 排除了微信应用、备份、消息数据库、token、日志、截图、验收证据、下载包和虚拟环境；发布前仍应运行 `git status` 和敏感信息检查。
 - 本项目会修改并重签指定微信应用。使用前备份数据，确认自己有权在该设备和账号上进行研究；项目作者不提供数据丢失、账号限制或微信升级后的兼容保证。
 - 不包含完整微信历史导入、联系人枚举、撤回 API、图片/视频/文件的原生后台发送或自动登录。结果不明的消息不会自动重发。

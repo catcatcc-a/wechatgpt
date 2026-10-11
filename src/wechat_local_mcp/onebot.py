@@ -37,12 +37,13 @@ class OneBotBackend:
             reachable, error = False, str(exc)
         hook = reachable and state.get("hook_verified") is True
         template = hook and state.get("send_template_ready") is True
+        native = hook and bool(self.config.native_sender_command) and state.get("native_sender_supported") is True
         return {
             "backend": "onebot", "reachable": reachable, "error": error,
-            "api_reachable": reachable, "ready": template,
+            "api_reachable": reachable, "ready": template or native,
             "hook_verified": hook, "send_template_ready": template,
             "login_verified": False,
-            "status_scope": "Authenticated live hook probe; ready means the hook and send template are available. Login is verified by actual message traffic, not an independent login API.",
+            "status_scope": "Authenticated live hook probe; ready means the hook and a configured native sender or network send template are available. Login is verified by actual message traffic, not an independent login API.",
             "endpoint": self.config.onebot_url,
             "token_configured": bool(self.config.onebot_token),
             "delivery_verification": "server_ack_then_recipient_confirmation",
@@ -89,7 +90,7 @@ class OneBotBackend:
                 "message": "OneBot received a server acknowledgement. Remote receipt still needs recipient confirmation; this hook does not add a sent bubble to desktop WeChat.",
                 "desktop_send_echo": False, "check_recipient": True,
             }
-        rejected = response.status_code in {400, 401, 403, 404, 405, 413, 422}
+        rejected = response.status_code in {400, 401, 403, 404, 405, 413, 422, 501}
         return {
             "delivery_status": "failed" if rejected else "unverified",
             "transmission": "rejected" if rejected else "unknown",

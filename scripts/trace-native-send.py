@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Read-only observation of native File Transfer Assistant send parameters."""
 import frida
+from gadget_auth import connect
+from native_profile import load_profile
 import json
 import os
 import time
@@ -8,7 +10,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 os.umask(0o077)
-session = frida.get_device_manager().add_remote_device('127.0.0.1:27042').attach('Gadget')
+if load_profile()[0]['build'] != '269109':
+    raise SystemExit('This historical observation script supports only Build 269109')
+session = connect(frida).attach('Gadget')
 script = session.create_script(r'''
 const m=Process.enumerateModules().find(m=>m.name==='wechat.dylib'&&m.size>50000000),b=m.base;
 function str(p) {

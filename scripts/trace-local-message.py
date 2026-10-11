@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Observe the pinned native save path. No native calls or message writes."""
 import frida
+from gadget_auth import connect
+from native_profile import load_profile
 import json
 import os
 from pathlib import Path
@@ -9,11 +11,13 @@ import argparse
 
 ROOT = Path(__file__).resolve().parents[1]
 os.umask(0o077)
+if load_profile()[0]['build'] != '269109':
+    raise SystemExit('This historical observation script supports only Build 269109')
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--seconds', type=int, default=1800)
 options = parser.parse_args()
 directory = ROOT/'artifacts/local-echo'
-session = frida.get_device_manager().add_remote_device('127.0.0.1:27042').attach('Gadget')
+session = connect(frida).attach('Gadget')
 code = r'''
 const mod = Process.enumerateModules().find(x=>x.name==='wechat.dylib'&&x.size>50000000);
 const base = mod.base;

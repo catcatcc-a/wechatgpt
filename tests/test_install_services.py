@@ -6,6 +6,8 @@ from pathlib import Path
 import subprocess
 
 import pytest
+from gadget_auth import ensure_token
+from test_gadget_auth import make_app
 
 
 @pytest.mark.parametrize("existing", [False, True])
@@ -23,6 +25,9 @@ def test_installer_preserves_token_and_restricts_permissions(tmp_path, monkeypat
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("test fixture")
     source = root / "data/onebot.token"
+    gadget_token = ensure_token(root / 'data/gadget.token')
+    monkeypatch.setattr(installer, 'APP', make_app(tmp_path, gadget_token))
+    monkeypatch.setattr(installer, 'check_profile', lambda: None)
     source.write_text("fixture-project-token")
     source.chmod(0o644)
     target = runtime / "data/onebot.token"
@@ -41,3 +46,5 @@ def test_installer_preserves_token_and_restricts_permissions(tmp_path, monkeypat
         os.umask(old_mask)
     assert target.read_text() == ("fixture-existing-token" if existing else "fixture-project-token")
     assert target.stat().st_mode & 0o777 == 0o600
+    assert (runtime / 'data/gadget.token').read_text().strip() == gadget_token
+    assert (runtime / 'data/gadget.token').stat().st_mode & 0o777 == 0o600

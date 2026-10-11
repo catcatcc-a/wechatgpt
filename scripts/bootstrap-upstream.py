@@ -17,6 +17,7 @@ COMMIT = "f222f37321f66d3a199cb3c7642f77f7504d85da"
 PATCH = ROOT / "patches/wechat_chatter-local-auth.patch"
 DEVKIT_URL = "https://github.com/frida/frida/releases/download/17.8.0/frida-core-devkit-17.8.0-macos-arm64.tar.xz"
 DEVKIT_SHA256 = "7606cd0eda21829e268ed66e1ac7dcd819570baee7b7049a96e8986969bf32d1"
+GO_TOOLCHAIN = "go1.26.9"
 
 
 def run(*args: str, cwd: Path | None = None, env: dict[str, str] | None = None) -> None:
@@ -82,6 +83,7 @@ def build(devkit: Path) -> Path:
     env.update({
         "GOOS": "darwin", "GOARCH": "arm64", "CGO_ENABLED": "1", "CC": "/usr/bin/clang",
         "CGO_CFLAGS": f"-I{devkit}", "CGO_LDFLAGS": f"-L{devkit} -lfrida-core",
+        "GOTOOLCHAIN": GO_TOOLCHAIN, "GOMAXPROCS": "2",
     })
     run("go", "build", "-p=2", "-trimpath", "-o", str(output), ".", cwd=onebot, env=env)
     output.chmod(output.stat().st_mode | 0o111)
