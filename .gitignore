@@ -69,6 +69,12 @@ config.onebot.toml.*
 /vendor/*
 !/vendor/UPSTREAM_NOTES.md
 
-# Local agent instructions and generated MCP client configuration
+# Local agent state and generated MCP client configuration. AGENTS.md documents
+# this machine's runtime layout and must never be published with source.
 /AGENTS.md
 /mcp.json
+/.mcp.json
+/agent-local/
+/.local/
+*.local.json
+*.local.jsonl
