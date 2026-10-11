@@ -16,5 +16,6 @@ port = 36060
 
 [native]
 enabled = false
-# Enable only for the pinned 4.1.11.53 / 269109 ARM64 build.
+# install-services.py configures this for an exactly supported ARM64 build.
+# See native/wechat-*.json; never enable it for an unverified version.
 # command = ["/absolute/path/.venv/bin/python", "/absolute/path/scripts/native-send.py"]

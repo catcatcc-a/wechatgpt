@@ -4,6 +4,10 @@
 
 > 本项目是个人研究和技术交流项目，与腾讯或微信官方无关。它只在明确适配的微信版本上工作，不能把未知版本当作兼容版本使用。
 
+**发布状态：源码预览，尚未发布到 GitHub。** 后台文本收发已实测，但重签后的普通图标启动和辅助进程修复仍待最终验收；当前不能视为即装即用的稳定版。发布前先查看 [审阅清单](docs/release-review.md)。
+
+文档入口：[安装](#在另一台-apple-silicon-mac-上安装) · [日常使用与自启动](docs/daily-use.md) · [实测范围](docs/live-validation.md) · [安全说明](SECURITY.md) · [贡献](CONTRIBUTING.md)。
+
 ## 功能
 
 - 提供 `wechat_status`、`wechat_list_chats`、`wechat_read_messages`、`wechat_send_text` 和 `wechat_send_status` 五个 MCP 工具。
@@ -14,7 +18,7 @@
 - GUI 后端默认关闭。日常后台收发不激活微信窗口、不模拟鼠标键盘，也不会在后台失败时自动切换到 GUI。
 - 启动前检查微信版本、Build 和原生模块 UUID；版本不匹配时停止，不使用旧偏移强行注入。
 
-当前已在 Apple Silicon 上验证微信 **4.1.15.54 / Build 270134** 的文件传输助手双向文本收发：MCP 后台发送取得服务器回执，电脑显示气泡，用户确认手机收到；手机发回的文本通过签名回调进入缓存，并能由 MCP 读取。此前 4.1.11.53 / Build 269109 也通过了文件传输助手测试。普通联系人和群聊仍需分别验收。
+当前已在 Apple Silicon 上验证微信 **4.1.15.54 / Build 270134** 的文件传输助手双向文本收发：MCP 后台发送取得服务器回执，电脑显示气泡，用户确认手机收到；手机发回的文本通过签名回调进入缓存，并能由 MCP 读取。此前 4.1.11.53 / Build 269109 也通过了文件传输助手测试。新版另完成一次明确授权的普通联系人文本发送，获得服务器回执和本地记录，并核对电脑会话预览；尚未取得该联系人的接收确认。群聊未完成实机验收。
 
 4.1.15 的接收路径仅捕获新到达的文本消息，不处理媒体。版本布局、运行验证及安装准备见 [新版适配说明](docs/wechat-4.1.15.md)；安全修复与部署状态见 [修复记录](docs/security-remediation.md)。
 
@@ -48,9 +52,9 @@ wechat-local-mcp
 
 ## 兼容性
 
-| 项目 | 已验证值 |
+| 项目 | 要求或验证范围 |
 | --- | --- |
-| 操作系统 | macOS 12 或更高版本（安装包声明的最低版本）；本机验收为 macOS 27.0.1 |
+| 操作系统 | 实机验收为 macOS 27.0.1；微信安装包声明最低 macOS 12，不代表整套工具已在 macOS 12 验收 |
 | CPU | Apple Silicon / `arm64` |
 | 微信 Bundle ID | `com.tencent.xinWeChat` |
 | 微信版本 | `4.1.15.54` / `4.1.11.53`（界面可能只显示前三段） |
@@ -68,7 +72,7 @@ Intel Mac、Windows、Linux，以及其他未列出的微信 Build 都不属于�
 
 ### 1. 安装工具并下载项目
 
-需要 Xcode Command Line Tools、支持自动工具链下载的 Go、Python 3.11+、`uv`、Git 和可用的网络连接。构建固定使用 Go 1.26.9（自动下载到独立缓存）。先安装 `uv`（例如 `brew install uv`），然后：
+需要 Xcode Command Line Tools、支持自动工具链下载的 Go、Python 3.11+、`uv`、Git、`xz` 和可用的网络连接。运行完整离线测试还需 Node.js。构建固定使用 Go 1.26.9。先安装工具（例如 `brew install uv go xz`），再取得项目源码。下方仓库地址是占位，发布时替换为用户审核后的实际地址：
 
 ```sh
 git clone https://github.com/<your-account>/wechat-local-mcp.git
@@ -127,7 +131,7 @@ xz -dk downloads/frida-gadget-17.8.0-macos-universal.dylib.xz
 .venv/bin/python scripts/install-services.py
 ```
 
-安装脚本会把服务副本放到 `~/Library/Application Support/WeChatLocalMCP/`，生成随机 OneBot token，并注册两个用户级 LaunchAgent。它不会操作微信窗口。服务状态和日志位于运行目录；token、SQLite 缓存和日志不应提交 Git。
+安装脚本会把服务副本放到 `~/Library/Application Support/WeChatLocalMCP/`，生成随机 OneBot token，并注册两个用户级 LaunchAgent。它们在登录 macOS 后自动启动，异常退出后重启；微信重启后尝试重连。脚本不会自动打开或登录微信。日常启动、暂停、停用自启动和卸载步骤见 [使用说明](docs/daily-use.md)。token、SQLite 缓存和日志不应提交 Git。
 
 验证静态版本和 MCP stdio 握手：
 
@@ -148,13 +152,23 @@ cp mcp.example.json mcp.json
 # 编辑 mcp.json，把 /absolute/path/to/wechat-local-mcp 改为当前项目目录
 ```
 
-把 `mcp.json` 导入支持本地 stdio MCP 的客户端，或直接使用：
+把 `mcp.json` 中的配置填入支持本地 stdio MCP 的客户端，由客户端启动 MCP。可独立测试握手：
 
 ```sh
-./scripts/start-mcp.sh
+.venv/bin/python scripts/mcp_smoke.py
 ```
 
 MCP 名称是 `wechat-local`。文件传输助手使用 `chat_id="filehelper"`；普通私聊使用准确的 `wxid_...`，群聊使用完整的 `@chatroom` ID，并设置 `chat_type="group"`。
+
+`scripts/start-mcp.sh` 是供客户端调用的 stdio 入口，手动执行后等待协议输入属于正常现象。MCP server 自报名称为 `wechat-local-mcp`，配置里的 `wechat-local` 是客户端连接名称。
+
+| 工具 | 用途与边界 |
+| --- | --- |
+| `wechat_status` | 检查当前后端和 Hook；可用状态不等于已登录或对方已读 |
+| `wechat_list_chats` | 列出回调缓存中出现过的会话，不是完整通讯录 |
+| `wechat_read_messages` | 按会话读取缓存；`after_id` 用于增量读取 |
+| `wechat_send_text` | 向准确会话 ID 发送授权文本；用稳定的 `request_id` 去重 |
+| `wechat_send_status` | 查询原请求结果，不再次发送 |
 
 ## 安全、隐私和边界
 
@@ -172,10 +186,13 @@ MCP 名称是 `wechat-local`。文件传输助手使用 `chat_id="filehelper"`�
 
 ```sh
 .venv/bin/python -m pytest -q
+.venv/bin/python scripts/check_public_tree.py --history
 git diff --check
 ```
 
 离线测试覆盖 MCP stdio、配置校验、OneBot 请求/回调、请求去重、原生 helper 输入限制和 GUI 安全边界。安装 Node.js 后还会执行模拟内存中的原生接收脚本测试，验证批量边界、事件过滤和去重；测试不会连接微信。上游 Go 测试需要先执行 `scripts/bootstrap-upstream.py`，然后在 `vendor/wechat_chatter/onebot` 中运行 `go test ./...`。
+
+GitHub CI 配置只执行离线测试、发布内容检查和 GUI helper 编译，不安装微信或加载 Gadget。云端工作流尚未运行，不能用本地通过替代云端结果。完整构建和验证命令见 [构建说明](docs/build-status.md)。
 
 贡献代码前请不要提交 `config.toml`、`mcp.json`、`data/`、`artifacts/`、`evidence/`、`backups/`、`downloads/`、`runtime/` 或 `vendor/` 下的本地副本。提交补丁或适配新微信版本时，请同时补充版本、架构、UUID、偏移来源和真实验收范围。
 

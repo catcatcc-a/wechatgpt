@@ -5,11 +5,12 @@ build-backend = "hatchling.build"
 [project]
 name = "wechat-local-mcp"
 version = "0.1.0"
-description = "Local WeChat MCP with a OneBot bridge and a macOS GUI backend"
+description = "macOS WeChat MCP with native text sending and signed message callbacks"
+readme = "README.md"
 requires-python = ">=3.11"
 license = { file = "LICENSE" }
 authors = [{ name = "wechat-local-mcp contributors" }]
-classifiers = ["License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)", "Operating System :: MacOS"]
+classifiers = ["License :: OSI Approved :: GNU General Public License v3 (GPLv3)", "Operating System :: MacOS"]
 dependencies = ["mcp>=1.26,<2", "httpx>=0.28,<1", "starlette>=0.46", "uvicorn>=0.35", "frida==17.8.0; sys_platform == 'darwin'"]
 
 [project.scripts]

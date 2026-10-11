@@ -8,8 +8,11 @@ runtime logs.
 Please do not include account identifiers, message text, screenshots, tokens,
 微信数据目录, or private crash dumps in a public issue. For a suspected
 authentication, arbitrary-request, or data-disclosure problem, contact the
-maintainer privately through the GitHub account hosting this repository before
-opening a public issue.
+maintainer privately before opening a public issue. This repository is still a
+local source preview: before public launch, the owner must enable GitHub private
+vulnerability reporting or provide a verified private contact. Once enabled,
+use Security → Report a vulnerability. Do not put security details in a public
+issue when no private channel is available.
 
 The local OneBot cache and upstream runtime logs can contain message text,
 chat identifiers, media metadata, and file paths. Treat them as private user

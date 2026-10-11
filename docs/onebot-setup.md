@@ -7,6 +7,8 @@
 
 完整安装步骤见 [README](../README.md)。本页用于日常检查和开发更新。
 
+登录后自启动、正常退出微信时的行为及停用步骤见 [日常使用](daily-use.md)。这里的服务安装和更新不负责启动或登录微信。
+
 ## 检查
 
 ```sh
@@ -17,7 +19,7 @@ launchctl print gui/$(id -u)/local.wechat-mcp.webhook
 .venv/bin/python scripts/doctor.py
 ```
 
-不带 `--start` 的 `start-onebot.py` 只读取 `/Applications/WeChat.app/Contents/Info.plist` 并检查固定 Build，不附加进程，也不启动微信。`ready=true` 表示已通过鉴权的 Hook 状态探测；它不等于接收方已读。Webhook 的 `/health` 也要求同一个 Bearer token，`/onebot` 仍使用原始正文 HMAC 签名。
+不带 `--start` 的 `start-onebot.py` 只检查应用版本、配置和所需文件，不附加进程，也不启动微信。`ready=true` 表示通过鉴权的 Hook 探测及可用发送路径；它不等于接收方已读。Webhook 的 `/health` 也要求同一个 Bearer token，`/onebot` 仍使用原始正文 HMAC 签名。
 
 ## 服务文件和数据
 
@@ -41,6 +43,6 @@ launchctl print gui/$(id -u)/local.wechat-mcp.webhook
 
 ## 接口边界
 
-MCP 原生文本发送使用 `[native]` 配置的 helper。上游 OneBot 的 `/send_private_msg` 和 `/send_group_msg` 仍用于桥接和接收，但直接调用旧网络接口不会创建电脑本地聊天记录。原生 helper 失败时不会自动回退到旧接口或 GUI。
+MCP 原生文本发送使用 `[native]` 配置的 helper。4.1.15 的 OneBot 以 `receive_only` 模式运行，旧 HTTP/WS 发送入口被禁用，发送统一使用原生 helper；4.1.11 的旧网络发送入口仍保留，但不会补写电脑聊天记录。这两个发送接口都不是接收接口；接收由 Hook 经签名回调 POST 到 Webhook 的 `/onebot`。原生 helper 失败时不会自动回退到旧接口或 GUI。
 
 回调使用 `X-Signature: sha1=<HMAC-SHA1(token, raw body)>`。发送回执按任务 ID 关联；无法解析或超时都返回结果不明，不自动重发。

@@ -9,6 +9,8 @@ fixed at commit `f222f37321f66d3a199cb3c7642f77f7504d85da`. That upstream
 project is GPL-3.0; the local changes are recorded in
 `patches/wechat_chatter-local-auth.patch` and the upstream license applies to
 the derived engine.
+Upstream copyright notice: Copyright (C) 2026 yincongcyincong. The pinned
+upstream LICENSE remains in the fetched source; it is not replaced by the patch.
 
 The Mach-O injection helper is adapted from
 [xiaoguiwucan/wechat-mac-hook-classic](https://github.com/xiaoguiwucan/wechat-mac-hook-classic),

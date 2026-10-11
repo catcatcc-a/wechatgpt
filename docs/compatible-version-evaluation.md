@@ -1,6 +1,6 @@
 # 兼容版本评估
 
-本项目目前只接受 **微信 4.1.11.53 / Build 269109 / arm64**。`scripts/start-onebot.py`、`scripts/native-send.py` 和 `native/wechat_send.js` 都会拒绝其他 Build。
+本页保留早期 **微信 4.1.11.53 / Build 269109 / arm64** 的安装包评估记录。项目现已另行适配 **4.1.15.54 / Build 270134**；当前安装流程和兼容范围以 [README](../README.md) 与 [新版说明](wechat-4.1.15.md) 为准。本页不构成降级建议，不应使用旧版实验脚本替换正在使用的新版微信。
 
 候选微信安装包来自腾讯公开地址：
 

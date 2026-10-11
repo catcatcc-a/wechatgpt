@@ -52,3 +52,5 @@ git -C vendor/wechat_chatter apply ../../patches/wechat_chatter-local-auth.patch
 当前本机副本已应用补丁，不要重复执行。以后修改上游源码时也应更新根仓库中的补丁，包含新增文件和测试。构建依赖另见 [构建说明](build-status.md)。
 
 公开发布前请先检查 README、许可证、忽略规则和 `git diff --cached`；不要把本地 token、聊天缓存、截图或微信备份上传到远程仓库。
+
+可重复的索引及历史检查、源码归档方法和待确认事项见 [发布审阅](release-review.md)。执行 `scripts/check_public_tree.py --history` 只检查 Git 中的内容，不修改微信或运行服务；不要用“工作目录看起来干净”替代对已提交历史的检查。

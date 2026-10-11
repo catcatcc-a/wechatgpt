@@ -27,7 +27,28 @@
 | --- | --- |
 | OneBot 上游 | `f222f37321f66d3a199cb3c7642f77f7504d85da` |
 | Frida | `17.8.0` |
+| Go 工具链 | `go1.26.9` |
 | 目标架构 | macOS `arm64` |
-| 微信 | `4.1.11.53` / `269109` |
+| 微信 | `4.1.15.54` / `270134`；`4.1.11.53` / `269109` |
 
 如果更新其中任何一个输入，必须更新版本说明并重新进行真实收发验收。
+
+## Go 测试
+
+完成 bootstrap 后，从项目根目录运行：
+
+```sh
+cd vendor/wechat_chatter/onebot
+GOTOOLCHAIN=go1.26.9 GOMAXPROCS=2 CGO_ENABLED=1 \
+  CGO_CFLAGS="-I$(pwd)/../frida-devkit" \
+  CGO_LDFLAGS="-L$(pwd)/../frida-devkit -lfrida-core" \
+  go test -p=2 ./...
+```
+
+这些测试不连接微信。不要仅执行不带 devkit 路径的 `go test` 后，将链接失败误判为微信适配错误。
+
+## 干净副本与 CI
+
+公开仓库应能从 Git 管理的源码恢复 Python 环境并运行离线测试，不依赖 `config.toml`、运行副本或消息缓存。GitHub 工作流选择 `macos-15` arm64 runner，检查最低声明的 Python 3.11；Node.js 模拟接收脚本不允许静默遗漏。Swift helper 仅编译，不执行界面操作。
+
+工作流不做实机验证或云端发布。macOS 15 的编译测试不能替代 macOS 12 或其他系统上的安装验收。runner 规格参见 [GitHub 官方说明](https://docs.github.com/en/actions/reference/runners/github-hosted-runners)。当前锁文件使用公开 TUNA PyPI 镜像地址；`uv sync --locked` 会核对包哈希，访问镜像失败时不会自动更换依赖版本。
