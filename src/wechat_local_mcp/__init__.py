@@ -1,0 +1,1 @@
+"""Local WeChat MCP bridge."""

@@ -1,0 +1,20 @@
+backend = "gui"
+data_dir = "data"
+
+[gui]
+enabled = false
+# Local window OCR and exact visible chat-title verification.
+
+[onebot]
+url = "http://127.0.0.1:58080"
+# Set WECHAT_ONEBOT_TOKEN or token_file before using the OneBot backend.
+timeout = 20
+
+[webhook]
+host = "127.0.0.1"
+port = 36060
+
+[native]
+enabled = false
+# Enable only for the pinned 4.1.11.53 / 269109 ARM64 build.
+# command = ["/absolute/path/.venv/bin/python", "/absolute/path/scripts/native-send.py"]

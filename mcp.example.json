@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "wechat-local": {
+      "command": "/absolute/path/to/wechat-local-mcp/scripts/start-mcp.sh",
+      "args": []
+    }
+  }
+}

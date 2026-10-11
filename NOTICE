@@ -1,0 +1,19 @@
+# Notices
+
+`wechat-local-mcp` is an independent integration project. It is not made,
+endorsed, or supported by Tencent or WeChat.
+
+The OneBot engine is adapted from
+[yincongcyincong/wechat_chatter](https://github.com/yincongcyincong/wechat_chatter),
+fixed at commit `f222f37321f66d3a199cb3c7642f77f7504d85da`. That upstream
+project is GPL-3.0; the local changes are recorded in
+`patches/wechat_chatter-local-auth.patch` and the upstream license applies to
+the derived engine.
+
+The Mach-O injection helper is adapted from
+[xiaoguiwucan/wechat-mac-hook-classic](https://github.com/xiaoguiwucan/wechat-mac-hook-classic),
+fixed at commit `3180313e08c24bf8c38e788527360d1b8d911f3d`. Its GPL-3.0 license
+and source attribution are retained in `scripts/inject_load_dylib.py`.
+
+Frida is used as a runtime dependency under its own license. WeChat, its
+application bundle, and its trademarks remain the property of their owners.

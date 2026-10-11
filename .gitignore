@@ -1,0 +1,55 @@
+# Python environments and generated files
+.venv/
+.re-venv/
+__pycache__/
+.pytest_cache/
+*.py[cod]
+*.egg-info/
+.ruff_cache/
+.mypy_cache/
+.coverage
+.coverage.*
+htmlcov/
+build/
+dist/
+.DS_Store
+
+# Local applications, binaries, downloads and private runtime data
+bin/
+data/
+artifacts/
+evidence/
+logs/
+runtime/
+backups/
+downloads/
+.wheels/
+*.log
+*.sqlite
+*.sqlite-*
+*.sqlite3
+*.sqlite3-*
+*.db
+*.db-*
+
+# Local configuration and credentials (examples remain tracked)
+config.toml
+config.onebot.toml
+config.toml.*
+config.onebot.toml.*
+*.local.toml
+.env
+.env.*
+!.env.example
+.secrets/
+*.token
+*.key
+*.pem
+
+# Preserve upstream changes as a pinned revision plus patch, not nested repos
+/vendor/*
+!/vendor/UPSTREAM_NOTES.md
+
+# Local agent instructions and generated MCP client configuration
+/AGENTS.md
+/mcp.json

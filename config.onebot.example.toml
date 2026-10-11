@@ -1,0 +1,14 @@
+backend = "onebot"
+data_dir = "data"
+
+[onebot]
+url = "http://127.0.0.1:58080"
+token_file = "data/onebot.token"
+timeout = 20
+
+[webhook]
+host = "127.0.0.1"
+port = 36060
+
+[gui]
+enabled = false

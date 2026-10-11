@@ -1,0 +1,29 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "wechat-local-mcp"
+version = "0.1.0"
+description = "Local WeChat MCP with a OneBot bridge and a macOS GUI backend"
+requires-python = ">=3.11"
+license = { file = "LICENSE" }
+authors = [{ name = "wechat-local-mcp contributors" }]
+classifiers = ["License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)", "Operating System :: MacOS"]
+dependencies = ["mcp>=1.26,<2", "httpx>=0.28,<1", "starlette>=0.46", "uvicorn>=0.35", "frida==17.8.0; sys_platform == 'darwin'"]
+
+[project.scripts]
+wechat-local-mcp = "wechat_local_mcp.server:main"
+
+[dependency-groups]
+dev = ["pytest>=8", "pytest-asyncio>=1"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/wechat_local_mcp"]
+
+[tool.uv]
+environments = ["sys_platform == 'darwin' and platform_machine == 'arm64'"]

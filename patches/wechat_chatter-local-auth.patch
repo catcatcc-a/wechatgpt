@@ -1,0 +1,679 @@
+diff --git a/onebot/http.go b/onebot/http.go
+index a230d34..5bcca92 100644
+--- a/onebot/http.go
++++ b/onebot/http.go
+@@ -22,13 +22,6 @@ func sendHandler(w http.ResponseWriter, r *http.Request) {
+ 		return
+ 	}
+ 
+-	token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+-	if config.OnebotToken == "" || token == "" || !hmac.Equal([]byte(token), []byte(config.OnebotToken)) {
+-		http.Error(w, "未授权", http.StatusUnauthorized)
+-		Error("未授权")
+-		return
+-	}
+-
+ 	req := new(SendRequest)
+ 	if err := json.NewDecoder(r.Body).Decode(req); err != nil {
+ 		http.Error(w, "无效的 JSON", http.StatusBadRequest)
+@@ -181,7 +174,7 @@ func SendHttpReq(jsonData []byte) {
+ 		return
+ 	}
+ 
+-	Info("发送数据", "msg", string(jsonReq))
++	Info("发送数据", "bytes", len(jsonReq))
+ 	req, err := http.NewRequest("POST", config.SendURL, bytes.NewBuffer(jsonReq))
+ 	if err != nil {
+ 		Error("创建请求失败", "err", err)
+@@ -212,7 +205,7 @@ func SendHttpReq(jsonData []byte) {
+ 		return
+ 	}
+ 
+-	Info("返回内容", "status", resp.StatusCode, "body", string(body))
++	Info("返回内容", "status", resp.StatusCode, "bytes", len(body))
+ }
+ 
+ // jsonUnescapeString 对双重JSON编码的字符串做unescape
+@@ -264,4 +257,3 @@ func extractFileName(s string) string {
+ 	}
+ 	return s
+ }
+-
+diff --git a/onebot/main.go b/onebot/main.go
+index a72d50b..c2fb58c 100644
+--- a/onebot/main.go
++++ b/onebot/main.go
+@@ -6,7 +6,6 @@ import (
+ 	"flag"
+ 	"fmt"
+ 	"net/http"
+-	_ "net/http/pprof"
+ 	"os"
+ 	"os/signal"
+ 	"runtime/debug"
+@@ -20,6 +19,10 @@ import (
+ 
+ func main() {
+ 	initFlag()
++	if config.OnebotToken == "" {
++		fmt.Fprintln(os.Stderr, "OneBot token required: set WECHAT_ONEBOT_TOKEN or pass -token")
++		os.Exit(2)
++	}
+ 	initLogger()
+ 	if config.FridaType == "gadget" {
+ 		initFridaGadget()
+@@ -29,26 +32,22 @@ func main() {
+ 	go SendWorker()
+ 	go cleanExpiredDownloads()
+ 
+-	http.HandleFunc("/send_private_msg", sendHandler)
+-	http.HandleFunc("/send_group_msg", sendHandler)
+-
+-	http.HandleFunc("/ws", handleWebSocket)
+-	http.HandleFunc("/test_ws", testWebSocket)
++	handler := newHTTPHandler(config.OnebotToken, sendHandler, handleWebSocket)
+ 
+ 	stop := make(chan os.Signal, 1)
+ 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
+ 
+ 	go func() {
+ 		<-stop
+-		fridaScript.Clean()
+-		session.Clean()
+-		device.Clean()
+-		Fatal("正在释放 Frida 资源并退出...")
++		if session != nil && !session.IsDetached() {
++			_ = session.Detach()
++		}
++		os.Exit(0)
+ 	}()
+ 
+ 	// 3. 启动服务
+ 	Info("HTTP 服务启动在", "host", config.ReceiveHost)
+-	if err := http.ListenAndServe(config.ReceiveHost, nil); err != nil {
++	if err := http.ListenAndServe(config.ReceiveHost, handler); err != nil {
+ 		Error("服务启动失败", "err", err)
+ 	}
+ 
+@@ -59,7 +58,7 @@ func initFlag() {
+ 	flag.StringVar(&config.SendURL, "send_url", "http://127.0.0.1:36060/onebot", "发送消息的 URL: http://127.0.0.1:36060/onebot")
+ 	flag.StringVar(&config.ReceiveHost, "receive_host", "127.0.0.1:58080", "接收消息的地址: 127.0.0.1:58080")
+ 	flag.StringVar(&config.FridaGadgetAddr, "gadget_addr", "127.0.0.1:27042", "Gadget 地址: 127.0.0.1:27042 仅当 type 为 gadget 时有效")
+-	flag.StringVar(&config.OnebotToken, "token", "MuseBot", "OneBot Token: MuseBot")
++	flag.StringVar(&config.OnebotToken, "token", "", "OneBot token (or set WECHAT_ONEBOT_TOKEN)")
+ 	flag.StringVar(&config.ImagePath, "image_path", "", "图片路径: /Users/xxx/Library/Containers/com.tencent.xinWeChat/Data/Documents/xwechat_files/xxx/temp/xxx/2026-01/Img/")
+ 	flag.StringVar(&config.WechatConf, "wechat_conf", "../wechat_version/4_1_11_53_mac.json", "微信配置文件路径: ../wechat_version/4_1_6_12_mac.json")
+ 	flag.StringVar(&config.ConnType, "conn_type", "http", "连接类型: http | websocket")
+@@ -68,6 +67,9 @@ func initFlag() {
+ 	flag.StringVar(&logLevel, "log_level", "info", "log level")
+ 
+ 	flag.Parse()
++	if config.OnebotToken == "" {
++		config.OnebotToken = os.Getenv("WECHAT_ONEBOT_TOKEN")
++	}
+ 
+ 	if myWechatId == "" && config.ImagePath != "" {
+ 		if idx := strings.Index(config.ImagePath, "xwechat_files/"); idx != -1 {
+@@ -86,7 +88,6 @@ func initFlag() {
+ 	fmt.Println("SendURL", config.SendURL)
+ 	fmt.Println("ReceiveHost", config.ReceiveHost)
+ 	fmt.Println("FridaGadgetAddr", config.FridaGadgetAddr)
+-	fmt.Println("OnebotToken", config.OnebotToken)
+ 	fmt.Println("ImagePath", config.ImagePath)
+ 	fmt.Println("WechatConf", config.WechatConf)
+ 	fmt.Println("ConnType", config.ConnType)
+@@ -111,6 +112,14 @@ func initFridaGadget() {
+ 
+ 	loadJs()
+ 
++	// Exit so launchd reconnects when the user restarts WeChat.
++	go func() {
++		for range time.Tick(3 * time.Second) {
++			if session.IsDetached() {
++				os.Exit(1)
++			}
++		}
++	}()
+ }
+ 
+ func initFrida() {
+@@ -235,7 +244,8 @@ func loadJs() {
+ 												rawBytes[i] = byte(int(f))
+ 											}
+ 										}
+-										HandleBuf2Resp(msgType, rawBytes)
++										task, _ := pMap["task_id"].(float64)
++										HandleBuf2Resp(int64(task), msgType, rawBytes)
+ 									}
+ 								}
+ 							}()
+diff --git a/onebot/param.go b/onebot/param.go
+index 9520047..8983936 100644
+--- a/onebot/param.go
++++ b/onebot/param.go
+@@ -102,6 +102,7 @@ type VideoInfo struct {
+ }
+ 
+ type Buf2RespData struct {
++	TaskID  int64
+ 	MsgType string
+ 	Data    []byte
+ 	Err     error
+diff --git a/onebot/resp_parser.go b/onebot/resp_parser.go
+index 23372ab..6874e80 100644
+--- a/onebot/resp_parser.go
++++ b/onebot/resp_parser.go
+@@ -14,7 +14,7 @@ import (
+ //   - voice: BaseResponse 在 field 10 → SendVoiceMsgResponse
+ //
+ // 返回 (ret, errMsg, error)
+-// 如果两种格式都无法提取到有效的 BaseResponse，返回 ret=0 视为成功
++// 如果两种格式都无法提取到有效的 BaseResponse，返回错误，调用方不得宣称成功
+ func ParseSendMsgResponse(data []byte) (int32, string, error) {
+ 	// 尝试格式1: BaseResponse 在 field 1 (text/video/image/file/reply)
+ 	resp1 := &wxproto.SendMsgResponse{}
+@@ -40,6 +40,6 @@ func ParseSendMsgResponse(data []byte) (int32, string, error) {
+ 		}
+ 	}
+ 
+-	// 两种格式都未提取到 BaseResponse，视为成功
++	// 两种格式都未提取到 BaseResponse，返回错误
+ 	return 0, "", fmt.Errorf("unable to extract BaseResponse from response")
+ }
+diff --git a/onebot/script.js b/onebot/script.js
+index 980f858..2df81f3 100644
+--- a/onebot/script.js
++++ b/onebot/script.js
+@@ -17,6 +17,8 @@ var searchSize = 1000 * 1024 * 1024;
+ var searchEnd = moduleBase.add(searchSize);
+ var _req2bufSearchAddr = null;
+ var baseAddr = null;
++var localHookReady = false;
++var localHookError = false;
+ 
+ // 结构版本开关: 4.1.12 起上传完成结构 +0x08、下载任务结构 +0x18、寄存器漂移。
+ // JSON 里 "structVer": "2" = 4.1.12 布局; 旧版 JSON 无此键(渲染为 <no value>),
+@@ -135,16 +137,18 @@ function initAddresses() {
+     setImmediate(setupSendFileMessageDynamic);
+     setImmediate(setupSendFileUploadMessageDynamic);
+     setImmediate(setupSendAppAttachMessageDynamic);
+-    setImmediate(attachBlrX8Hook);
+-    setImmediate(AttachSendFunc);
+-    setImmediate(attachReq2buf);
++    setImmediate(function () {
++        try {
++            attachBlrX8Hook(); AttachSendFunc(); attachReq2buf(); setReceiver();
++            localHookReady = true;
++        } catch (e) { localHookError = true; throw e; }
++    });
+     setImmediate(setupSendImgMessageDynamic);
+     setImmediate(attachUploadMedia);
+     setImmediate(patchCdnOnComplete);
+     setImmediate(attachGetCallbackFromWrapper);
+     setImmediate(setupSendReplyMessageDynamic);
+     setImmediate(setupDownloadFileDynamic);
+-    setImmediate(setReceiver);
+ }
+ 
+ // -------------------------基础函数分区-------------------------
+@@ -1270,6 +1274,13 @@ function triggerSendVoiceMessage(taskId, sender, receiver, protoHex, payloadHex)
+ // -------------------------发送语音消息分区-------------------------
+ 
+ rpc.exports = {
++    localStatus: function () {
++        return { hook_verified: localHookReady && !localHookError,
++                 send_template_ready: !!triggerTaskSnapshot,
++                 login_verified: false,
++                 login_scope: "No independent login-state API; verify message traffic",
++                 pending_sends: Object.keys(pendingBuf2RespTasks).length };
++    },
+     hydrateCdnVideoCache: hydrateCdnVideoCache,
+     triggerSendImgMessage: triggerSendImgMessage,
+     triggerUploadImg: triggerUploadImg,
+@@ -1347,6 +1358,7 @@ function setReceiver() {
+ 					send({
+ 						type: "buf2resp",
+ 						msg_type: pendingEntry.msgType,
++						task_id: respTaskId,
+ 						data: Array.from(bytes),
+ 					});
+ 				}
+diff --git a/onebot/websocket.go b/onebot/websocket.go
+index e26a806..13c2a7e 100644
+--- a/onebot/websocket.go
++++ b/onebot/websocket.go
+@@ -3,12 +3,11 @@ package main
+ import (
+ 	"encoding/json"
+ 	"fmt"
+-	"io"
+ 	"net/http"
+ 	"runtime/debug"
+ 	"strings"
+ 	"time"
+-	
++
+ 	"github.com/gorilla/websocket"
+ )
+ 
+@@ -35,7 +34,7 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
+ 		return
+ 	}
+ 	defer conn.Close()
+-	
++
+ 	for {
+ 		m := new(OneBotWSMsg)
+ 		_, msgByte, err := conn.ReadMessage()
+@@ -43,14 +42,14 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
+ 			Error("读取失败", "err", err)
+ 			break
+ 		}
+-		
+-		Info("收到消息", "msg", string(msgByte))
++
++		Info("收到消息", "bytes", len(msgByte))
+ 		err = json.Unmarshal(msgByte, m)
+ 		if err != nil {
+ 			Error("解析失败", "err", err)
+ 			continue
+ 		}
+-		
++
+ 		switch m.Action {
+ 		case "get_login_info":
+ 			err = conn.WriteJSON(map[string]any{
+@@ -84,11 +83,11 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
+ 				Error("发送失败", "err", err)
+ 				break
+ 			}
+-			
++
+ 		}
+-		
++
+ 	}
+-	
++
+ }
+ 
+ func SendWebSocketMsg(jsonData []byte) {
+@@ -97,14 +96,14 @@ func SendWebSocketMsg(jsonData []byte) {
+ 			Error("ws panic", "err", r, "stack", string(debug.Stack()))
+ 		}
+ 	}()
+-	
++
+ 	if conn == nil {
+ 		Error("连接为空")
+ 		return
+ 	}
+-	
++
+ 	time.Sleep(time.Duration(config.SendInterval) * time.Millisecond)
+-	
++
+ 	jsonReq, err := HandleMsg(jsonData)
+ 	if err != nil {
+ 		Error("JSON 序列化失败", "err", err)
+@@ -113,8 +112,8 @@ func SendWebSocketMsg(jsonData []byte) {
+ 	if jsonReq == nil {
+ 		return
+ 	}
+-	
+-	Info("发送数据", "msg", string(jsonReq))
++
++	Info("发送数据", "bytes", len(jsonReq))
+ 	err = conn.WriteMessage(websocket.TextMessage, jsonReq)
+ 	if err != nil {
+ 		Error("发送消息失败", "err", err)
+@@ -139,7 +138,7 @@ func SendWS(req *WSParams) error {
+ 			Error("JSON 反序列化失败", "err", err)
+ 			return err
+ 		}
+-		
++
+ 		for _, v := range msgs {
+ 			if v.Type == "text" {
+ 				sendContent += v.Data.Text
+@@ -150,7 +149,7 @@ func SendWS(req *WSParams) error {
+ 						atUserID += v.Data.QQ + ","
+ 					}
+ 				}
+-				
++
+ 			} else if v.Type == "image" || v.Type == "video" {
+ 				msgChan <- &SendMsg{
+ 					UserId:  req.UserID,
+@@ -161,7 +160,7 @@ func SendWS(req *WSParams) error {
+ 			}
+ 		}
+ 	}
+-	
++
+ 	if sendContent != "" {
+ 		msgChan <- &SendMsg{
+ 			UserId:  req.UserID,
+@@ -171,20 +170,6 @@ func SendWS(req *WSParams) error {
+ 			AtUser:  strings.TrimRight(atUserID, ","),
+ 		}
+ 	}
+-	
+-	return nil
+-}
+ 
+-func testWebSocket(w http.ResponseWriter, r *http.Request) {
+-	jsonData, err := io.ReadAll(r.Body)
+-	if err != nil {
+-		Error("读取消息失败", "err", err)
+-		return
+-	}
+-	
+-	err = conn.WriteMessage(websocket.TextMessage, jsonData)
+-	if err != nil {
+-		Error("发送消息失败", "err", err)
+-		return
+-	}
++	return nil
+ }
+diff --git a/onebot/worker.go b/onebot/worker.go
+index 107e859..90b2ab4 100644
+--- a/onebot/worker.go
++++ b/onebot/worker.go
+@@ -319,17 +319,21 @@ func SendWechatMsg(m *SendMsg) {
+ 		}
+ 	}
+ 
+-	select {
+-	case <-ctx.Done():
+-		Error("任务执行超时！", "taskId", currTaskId)
+-		sendErr = errors.New("send timeout")
+-	case resp := <-buf2RespChan:
+-		if resp.Err != nil {
+-			Error("收到buf2resp失败信号", "taskId", currTaskId, "msg_type", resp.MsgType, "err", resp.Err)
+-			sendErr = resp.Err
+-			return
++	sendErr = waitForSendResponse(ctx, currTaskId, buf2RespChan)
++}
++
++// Ignore a late acknowledgement belonging to a previously timed-out request.
++func waitForSendResponse(ctx context.Context, taskID int64, replies <-chan *Buf2RespData) error {
++	for {
++		select {
++		case <-ctx.Done():
++			return errors.New("send timeout")
++		case resp := <-replies:
++			if resp.TaskID != taskID {
++				continue
++			}
++			return resp.Err
+ 		}
+-		Info("收到buf2resp完成信号，任务完成", "taskId", currTaskId, "msg_type", resp.MsgType, "data_len", len(resp.Data))
+ 	}
+ }
+ 
+@@ -506,12 +510,12 @@ func GetDownloadPath(cdnUrl, aesKeyStr, extHint string, totalLen int) (string, e
+ }
+ 
+ // HandleBuf2Resp 处理所有消息类型的buf2resp响应
+-func HandleBuf2Resp(msgType string, data []byte) {
++func HandleBuf2Resp(taskID int64, msgType string, data []byte) {
+ 	Info("收到buf2resp响应", "msg_type", msgType, "data_len", len(data))
+ 
+ 	if len(data) == 0 {
+ 		Error("buf2resp响应数据为空", "msg_type", msgType)
+-		buf2RespChan <- &Buf2RespData{
++		buf2RespChan <- &Buf2RespData{TaskID: taskID,
+ 			MsgType: msgType,
+ 			Data:    data,
+ 			Err:     errors.New("response data is empty"),
+@@ -528,13 +532,14 @@ func HandleBuf2Resp(msgType string, data []byte) {
+ 
+ 	ret, errMsg, err := ParseSendMsgResponse(data)
+ 	if err != nil {
+-		Info("buf2resp响应无法提取错误码，视为成功", "msg_type", msgType, "err", err)
++		buf2RespChan <- &Buf2RespData{TaskID: taskID, MsgType: msgType, Data: data, Err: fmt.Errorf("unparseable response: %w", err)}
++		return
+ 	}
+ 
+ 	// 判断错误码是否为0
+ 	if ret != 0 {
+ 		Error("buf2resp响应错误", "msg_type", msgType, "ret", ret, "errMsg", errMsg)
+-		buf2RespChan <- &Buf2RespData{
++		buf2RespChan <- &Buf2RespData{TaskID: taskID,
+ 			MsgType: msgType,
+ 			Data:    data,
+ 			Err:     fmt.Errorf("response error, ret=%d, errMsg=%s", ret, errMsg),
+@@ -543,7 +548,7 @@ func HandleBuf2Resp(msgType string, data []byte) {
+ 	}
+ 
+ 	Info("buf2resp响应成功", "msg_type", msgType)
+-	buf2RespChan <- &Buf2RespData{
++	buf2RespChan <- &Buf2RespData{TaskID: taskID,
+ 		MsgType: msgType,
+ 		Data:    data,
+ 	}
+diff --git a/onebot/server.go b/onebot/server.go
+new file mode 100644
+index 0000000..f56d782
+--- /dev/null
++++ b/onebot/server.go
+@@ -0,0 +1,57 @@
++package main
++
++import (
++	"context"
++	"crypto/hmac"
++	"encoding/json"
++	"net/http"
++	"strings"
++	"time"
++)
++
++// Keep authentication at the routing boundary, including the WebSocket
++// handshake. A private mux prevents debug handlers registered on DefaultServeMux
++// from becoming part of the message service.
++func newHTTPHandler(token string, send, websocket http.HandlerFunc) http.Handler {
++	mux := http.NewServeMux()
++	mux.Handle("/send_private_msg", requireToken(token, send))
++	mux.Handle("/send_group_msg", requireToken(token, send))
++	mux.Handle("/ws", requireToken(token, websocket))
++	mux.Handle("/local_status", requireToken(token, http.HandlerFunc(localStatus)))
++	return mux
++}
++
++// Probe the live Frida script, not just the HTTP listener.
++func localStatus(w http.ResponseWriter, r *http.Request) {
++	if r.Method != http.MethodGet {
++		w.WriteHeader(http.StatusMethodNotAllowed)
++		return
++	}
++	w.Header().Set("Content-Type", "application/json")
++	result := map[string]any{"hook_verified": false, "login_verified": false}
++	if session != nil && !session.IsDetached() && fridaScript != nil && !fridaScript.IsDestroyed() {
++		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
++		defer cancel()
++		if state, ok := fridaScript.ExportsCallWithContext(ctx, "localStatus").(map[string]any); ok {
++			result = state
++		}
++	}
++	json.NewEncoder(w).Encode(result)
++}
++
++func requireToken(token string, next http.Handler) http.Handler {
++	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		headers := r.Header.Values("Authorization")
++		var parts []string
++		if len(headers) == 1 {
++			parts = strings.Fields(headers[0])
++		}
++		if token == "" || len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") ||
++			!hmac.Equal([]byte(parts[1]), []byte(token)) {
++			w.Header().Set("WWW-Authenticate", "Bearer")
++			http.Error(w, "未授权", http.StatusUnauthorized)
++			return
++		}
++		next.ServeHTTP(w, r)
++	})
++}
+diff --git a/onebot/server_test.go b/onebot/server_test.go
+new file mode 100644
+index 0000000..fcde5e7
+--- /dev/null
++++ b/onebot/server_test.go
+@@ -0,0 +1,101 @@
++package main
++
++import (
++	"io"
++	"net/http"
++	"net/http/httptest"
++	"strings"
++	"testing"
++)
++
++func TestMessageRoutesRequireToken(t *testing.T) {
++	const secret = "test-local-secret"
++	for _, path := range []string{"/send_private_msg", "/send_group_msg", "/ws"} {
++		for _, authorization := range []string{"", "Bearer wrong", secret, "Basic " + secret, "Bearer", "Bearer " + secret + " extra"} {
++			t.Run(path+"/"+authorization, func(t *testing.T) {
++				called := false
++				downstream := func(w http.ResponseWriter, r *http.Request) { called = true }
++				handler := newHTTPHandler(secret, downstream, downstream)
++				req := httptest.NewRequest(http.MethodPost, path+"?access_token="+secret, nil)
++				req.Header.Set("Authorization", authorization)
++				response := httptest.NewRecorder()
++				handler.ServeHTTP(response, req)
++				if response.Code != http.StatusUnauthorized || called {
++					t.Fatalf("code=%d downstream_called=%v", response.Code, called)
++				}
++				if strings.Contains(response.Body.String(), secret) {
++					t.Fatal("response leaked token")
++				}
++			})
++		}
++	}
++}
++
++func TestAuthenticatedRoutesReachCorrectHandler(t *testing.T) {
++	send := func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, "send") }
++	websocket := func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, "websocket") }
++	server := httptest.NewServer(newHTTPHandler("secret", send, websocket))
++	defer server.Close()
++	for _, tc := range []struct{ path, want string }{
++		{"/send_private_msg", "send"},
++		{"/send_group_msg", "send"},
++		{"/ws", "websocket"},
++	} {
++		req, err := http.NewRequest(http.MethodGet, server.URL+tc.path, nil)
++		if err != nil {
++			t.Fatal(err)
++		}
++		req.Header.Set("Authorization", "bearer secret")
++		res, err := server.Client().Do(req)
++		if err != nil {
++			t.Fatal(err)
++		}
++		body, err := io.ReadAll(res.Body)
++		res.Body.Close()
++		if err != nil {
++			t.Fatal(err)
++		}
++		if res.StatusCode != http.StatusOK || string(body) != tc.want {
++			t.Fatalf("%s: code=%d body=%q", tc.path, res.StatusCode, body)
++		}
++	}
++}
++
++func TestEmptyTokenAndDuplicateHeadersFailClosed(t *testing.T) {
++	for _, token := range []string{"", "secret"} {
++		called := false
++		next := func(w http.ResponseWriter, r *http.Request) { called = true }
++		req := httptest.NewRequest(http.MethodGet, "/ws", nil)
++		req.Header.Add("Authorization", "Bearer secret")
++		if token != "" {
++			req.Header.Add("Authorization", "Bearer wrong")
++		}
++		response := httptest.NewRecorder()
++		newHTTPHandler(token, next, next).ServeHTTP(response, req)
++		if response.Code != http.StatusUnauthorized || called {
++			t.Fatalf("code=%d downstream_called=%v", response.Code, called)
++		}
++	}
++}
++
++func TestDebugRoutesAreNotExposed(t *testing.T) {
++	originalMux := http.DefaultServeMux
++	t.Cleanup(func() { http.DefaultServeMux = originalMux })
++	http.DefaultServeMux = http.NewServeMux()
++	http.DefaultServeMux.HandleFunc("/debug/pprof/", func(w http.ResponseWriter, r *http.Request) {
++		t.Fatal("default mux handler reached")
++	})
++	unused := func(w http.ResponseWriter, r *http.Request) { t.Fatal("message handler reached") }
++	handler := newHTTPHandler("secret", unused, unused)
++	for _, path := range []string{"/test_ws", "/debug/pprof/", "/debug/pprof/cmdline", "/debug/pprof/heap"} {
++		for _, header := range []string{"", "Bearer secret"} {
++			req := httptest.NewRequest(http.MethodPost, path, nil)
++			req.Header.Set("Authorization", header)
++			response := httptest.NewRecorder()
++			handler.ServeHTTP(response, req)
++			if response.Code != http.StatusNotFound {
++				t.Fatalf("%s: code=%d", path, response.Code)
++			}
++		}
++	}
++}
+diff --git a/onebot/local_runtime_test.go b/onebot/local_runtime_test.go
+new file mode 100644
+index 0000000..3c70a4a
+--- /dev/null
++++ b/onebot/local_runtime_test.go
+@@ -0,0 +1,48 @@
++package main
++
++import (
++	"context"
++	"errors"
++	"net/http"
++	"net/http/httptest"
++	"testing"
++	"time"
++)
++
++func TestLateResponseCannotCompleteAnotherSend(t *testing.T) {
++	replies := make(chan *Buf2RespData, 2)
++	replies <- &Buf2RespData{TaskID: 10}
++	expected := errors.New("current request failed")
++	replies <- &Buf2RespData{TaskID: 11, Err: expected}
++	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
++	defer cancel()
++	if got := waitForSendResponse(ctx, 11, replies); got != expected {
++		t.Fatalf("got %v", got)
++	}
++}
++
++func TestUnparseableResponseIsNotSuccess(t *testing.T) {
++	HandleBuf2Resp(17, "text", []byte{0xff})
++	result := <-buf2RespChan
++	if result.Err == nil || result.TaskID != 17 {
++		t.Fatalf("unexpected result: %+v", result)
++	}
++}
++
++func TestLocalStatusRequiresTokenAndReportsAbsentSession(t *testing.T) {
++	handler := newHTTPHandler("test-secret", nil, nil)
++	for _, authorized := range []bool{false, true} {
++		req := httptest.NewRequest(http.MethodGet, "/local_status", nil)
++		if authorized {
++			req.Header.Set("Authorization", "Bearer test-secret")
++		}
++		result := httptest.NewRecorder()
++		handler.ServeHTTP(result, req)
++		if !authorized && result.Code != 401 {
++			t.Fatal(result.Code)
++		}
++		if authorized && (result.Code != 200 || result.Body.String() != "{\"hook_verified\":false,\"login_verified\":false}\n") {
++			t.Fatal(result.Body.String())
++		}
++	}
++}
