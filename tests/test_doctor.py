@@ -44,3 +44,15 @@ def test_malformed_or_missing_core_offsets_cannot_be_selected(tmp_path):
         result = doctor.inspect_config(path, "4.1.12", "269365")
         assert not result["core_offsets_well_formed"]
         assert not result["candidate_for_installed_version"]
+
+
+def test_valid_signature_does_not_hide_helper_sandbox_failure(tmp_path, monkeypatch):
+    monkeypatch.setattr(doctor.platform, 'system', lambda: 'Darwin')
+    monkeypatch.setattr(doctor, 'run_read_only', lambda *a, **kw: (0, 'Signature=adhoc'))
+
+    def incompatible(_):
+        raise ValueError('Unsandboxed host has sandbox-inheriting helpers: XPlayer.app')
+
+    monkeypatch.setattr(doctor, 'verify_helper_sandbox', incompatible)
+    assert doctor.inspect_signature(tmp_path) == {
+        'verification': 'valid', 'kind': 'ad_hoc', 'helper_sandbox': 'incompatible'}

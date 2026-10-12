@@ -16,7 +16,7 @@ import time
 
 from gadget_auth import ensure_token, read_token, validate_app, write_config
 from native_profile import load_profile, verify_binary_profile
-from app_signing import resign_inherited_helpers
+from app_signing import resign_inherited_helpers, verify_helper_sandbox
 
 ROOT = Path(__file__).resolve().parents[1]
 APP = Path('/Applications/WeChat.app')
@@ -72,6 +72,7 @@ def prepare(source=APP):
     validate_app(STAGE, token)
     helpers = resign_inherited_helpers(STAGE)
     run('/usr/bin/codesign', '-f', '-s', '-', '--timestamp=none', STAGE)
+    verify_helper_sandbox(STAGE)
     prepared = inspect(STAGE)
     if prepared['core_sha256'] != original['core_sha256']:
         raise ValueError('Core library changed while preparing the app copy')
@@ -91,6 +92,8 @@ def activate():
     if inspect(APP) != report['original'] or inspect(STAGE) != report['prepared']:
         raise ValueError('Application changed since preparation; refusing to replace it')
     validate_app(STAGE, read_token(ROOT / 'data/gadget.token'))
+    # Older stages can pass codesign while their media helpers crash at startup.
+    verify_helper_sandbox(STAGE)
     backup = ROOT / 'backups' / ('security-' + time.strftime('%Y%m%d-%H%M%S'))
     backup.mkdir(parents=True, mode=0o700)
     candidate = APP.parent / '.WeChat-mcp-security.app'
@@ -98,6 +101,7 @@ def activate():
         raise ValueError('Existing installation candidate requires review')
     run('/bin/cp', '-cRp', STAGE, candidate)
     run('/usr/bin/codesign', '--verify', '--deep', '--strict', candidate)
+    verify_helper_sandbox(candidate)
     validate_app(candidate, read_token(ROOT / 'data/gadget.token'))
     # Recheck immediately before the swap; never rename a running application.
     if subprocess.run(['/usr/bin/pgrep', '-x', 'WeChat'], capture_output=True).returncode == 0:

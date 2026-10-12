@@ -10,8 +10,13 @@ import plistlib
 import subprocess
 
 
-def resign_inherited_helpers(app: Path) -> list[str]:
-    targets = set()
+def read_entitlements(bundle: Path) -> dict:
+    result = subprocess.run(['/usr/bin/codesign', '-d', '--entitlements', ':-', str(bundle)],
+                            check=True, capture_output=True)
+    return plistlib.loads(result.stdout) if result.stdout.strip() else {}
+
+
+def inherited_helpers(app: Path) -> list[Path]:
     helpers = []
     for info_path in app.rglob('Info.plist'):
         if info_path.is_symlink() or info_path.parent.name != 'Contents':
@@ -19,12 +24,39 @@ def resign_inherited_helpers(app: Path) -> list[str]:
         bundle = info_path.parent.parent
         if bundle == app or bundle.suffix not in {'.app', '.xpc', '.appex'}:
             continue
-        result = subprocess.run(['/usr/bin/codesign', '-d', '--entitlements', ':-', str(bundle)],
-                                check=True, capture_output=True)
-        entitlements = plistlib.loads(result.stdout) if result.stdout.strip() else {}
+        entitlements = read_entitlements(bundle)
         if entitlements.get('com.apple.security.inherit') is not True:
             continue
-        helpers.append(str(bundle.relative_to(app)))
+        # An independent sandboxed ancestor still supplies a valid sandbox.
+        for parent in bundle.parents:
+            if parent == app:
+                break
+            if parent.suffix in {'.app', '.xpc', '.appex'}:
+                parent_entitlements = read_entitlements(parent)
+                if (parent_entitlements.get('com.apple.security.app-sandbox') is True
+                        and parent_entitlements.get('com.apple.security.inherit') is not True):
+                    break
+        else:
+            continue
+        if parent == app:
+            helpers.append(bundle)
+    return sorted(helpers)
+
+
+def verify_helper_sandbox(app: Path) -> None:
+    """A valid code signature alone does not prove that helpers can start."""
+    if read_entitlements(app).get('com.apple.security.app-sandbox') is True:
+        return
+    helpers = inherited_helpers(app)
+    if helpers:
+        names = ', '.join(str(path.relative_to(app)) for path in helpers)
+        raise ValueError('Unsandboxed host has sandbox-inheriting helpers: ' + names)
+
+
+def resign_inherited_helpers(app: Path) -> list[str]:
+    targets = set()
+    helpers = inherited_helpers(app)
+    for bundle in helpers:
         targets.add(bundle)
         for parent in bundle.parents:
             if parent == app:
@@ -34,4 +66,4 @@ def resign_inherited_helpers(app: Path) -> list[str]:
     for bundle in sorted(targets, key=lambda p: len(p.parts), reverse=True):
         subprocess.run(['/usr/bin/codesign', '-f', '-s', '-', '--timestamp=none', str(bundle)],
                        check=True, capture_output=True)
-    return sorted(helpers)
+    return [str(bundle.relative_to(app)) for bundle in helpers]

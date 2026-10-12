@@ -15,6 +15,7 @@ import shutil
 import subprocess
 
 from native_profile import load_profile, verify_binary_profile
+from app_signing import verify_helper_sandbox
 
 
 PROJECT = Path(__file__).resolve().parent.parent
@@ -91,7 +92,14 @@ def inspect_signature(app: Path) -> dict:
     )
     verification = "unavailable" if verify_code is None else "valid" if verify_code == 0 else "invalid"
     # Never include raw tool output: signatures can identify a local developer.
-    return {"verification": verification, "kind": kind}
+    try:
+        verify_helper_sandbox(app)
+        helper_sandbox = "compatible"
+    except ValueError:
+        helper_sandbox = "incompatible"
+    except (OSError, subprocess.SubprocessError, plistlib.InvalidFileException):
+        helper_sandbox = "unavailable"
+    return {"verification": verification, "kind": kind, "helper_sandbox": helper_sandbox}
 
 
 def diagnose(app: Path, project: Path = PROJECT) -> dict:
